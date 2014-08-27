@@ -417,6 +417,9 @@ class DataSmart(MutableMapping):
                         match = True
                         if o:
                             for o2 in o.split("_"):
+                                m = __expand_var_regexp__.match(o2)
+                                if m:
+                                    o2 = self.getVar(o2[2:-1], True)
                                 if not o2 in overrides:
                                     match = False
                         if not match:
