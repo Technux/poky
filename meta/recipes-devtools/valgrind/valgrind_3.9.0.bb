@@ -15,7 +15,7 @@ SRC_URI = "http://www.valgrind.org/downloads/valgrind-${PV}.tar.bz2 \
            file://fixed-perl-path.patch \
            file://Added-support-for-PPC-instructions-mfatbu-mfatbl.patch \
            file://sepbuildfix.patch \
-           file://glibc-2.19.patch \
+           file://glibc-2.20.patch \
            file://force-nostabs.patch \
            file://remove-arm-variant-specific.patch \
            file://remove-ppc-tests-failing-build.patch \
@@ -48,7 +48,7 @@ FILES_${PN}-dbg += "${libdir}/${PN}/*/.debug/*"
 # redirect functions like strlen.
 RRECOMMENDS_${PN} += "${TCLIBC}-dbg"
 
-RDEPENDS_${PN}-ptest += " sed perl eglibc-utils"
+RDEPENDS_${PN}-ptest += " sed perl glibc-utils"
 
 do_compile_ptest() {
     oe_runmake check

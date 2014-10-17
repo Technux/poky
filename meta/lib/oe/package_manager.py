@@ -167,6 +167,9 @@ class DpkgIndexer(Indexer):
                 if a not in pkg_archs:
                     arch_list.append(a)
 
+        all_mlb_pkg_arch_list = (self.d.getVar('ALL_MULTILIB_PACKAGE_ARCHS', True) or "").replace('-', '_').split()
+        arch_list.extend(arch for arch in all_mlb_pkg_arch_list if arch not in arch_list)
+
         apt_ftparchive = bb.utils.which(os.getenv('PATH'), "apt-ftparchive")
         gzip = bb.utils.which(os.getenv('PATH'), "gzip")
 
@@ -219,6 +222,15 @@ class RpmPkgsList(PkgsList):
         self.ml_prefix_list, self.ml_os_list = \
             RpmIndexer(d, rootfs_dir).get_ml_prefix_and_os_list(arch_var, os_var)
 
+        # Determine rpm version
+        cmd = "%s --version" % self.rpm_cmd
+        try:
+            output = subprocess.check_output(cmd, stderr=subprocess.STDOUT, shell=True)
+        except subprocess.CalledProcessError as e:
+            bb.fatal("Getting rpm version failed. Command '%s' "
+                     "returned %d:\n%s" % (cmd, e.returncode, e.output))
+        self.rpm_version = int(output.split()[-1].split('.')[0])
+
     '''
     Translate the RPM/Smart format names to the OE multilib format names
     '''
@@ -267,11 +279,16 @@ class RpmPkgsList(PkgsList):
 
     def list(self, format=None):
         if format == "deps":
+            if self.rpm_version == 4:
+                bb.fatal("'deps' format dependency listings are not supported with rpm 4 since rpmresolve does not work")
             return self._list_pkg_deps()
 
         cmd = self.rpm_cmd + ' --root ' + self.rootfs_dir
         cmd += ' -D "_dbpath /var/lib/rpm" -qa'
-        cmd += " --qf '[%{NAME} %{ARCH} %{VERSION} %{PACKAGEORIGIN}\n]'"
+        if self.rpm_version == 4:
+            cmd += " --qf '[%{NAME} %{ARCH} %{VERSION}\n]'"
+        else:
+            cmd += " --qf '[%{NAME} %{ARCH} %{VERSION} %{PACKAGEORIGIN}\n]'"
 
         try:
             # bb.note(cmd)
@@ -288,7 +305,10 @@ class RpmPkgsList(PkgsList):
             pkg = line.split()[0]
             arch = line.split()[1]
             ver = line.split()[2]
-            pkgorigin = line.split()[3]
+            if self.rpm_version == 4:
+                pkgorigin = "unknown"
+            else:
+                pkgorigin = line.split()[3]
             new_pkg, new_arch = self._pkg_translate_smart_to_oe(pkg, arch)
 
             if format == "arch":
@@ -543,7 +563,7 @@ class RpmPM(PackageManager):
         self.install_dir = os.path.join(self.target_rootfs, "install")
         self.rpm_cmd = bb.utils.which(os.getenv('PATH'), "rpm")
         self.smart_cmd = bb.utils.which(os.getenv('PATH'), "smart")
-        self.smart_opt = "--data-dir=" + os.path.join(target_rootfs,
+        self.smart_opt = "--quiet --data-dir=" + os.path.join(target_rootfs,
                                                       'var/lib/smart')
         self.scriptlet_wrapper = self.d.expand('${WORKDIR}/scriptlet_wrapper')
         self.solution_manifest = self.d.expand('${T}/saved/%s_solution' %
@@ -556,6 +576,7 @@ class RpmPM(PackageManager):
 
         self.indexer = RpmIndexer(self.d, self.deploy_dir)
         self.pkgs_list = RpmPkgsList(self.d, self.target_rootfs, arch_var, os_var)
+        self.rpm_version = self.pkgs_list.rpm_version
 
         self.ml_prefix_list, self.ml_os_list = self.indexer.get_ml_prefix_and_os_list(arch_var, os_var)
 
@@ -745,43 +766,46 @@ class RpmPM(PackageManager):
         # After change the __db.* cache size, log file will not be
         # generated automatically, that will raise some warnings,
         # so touch a bare log for rpm write into it.
-        rpmlib_log = os.path.join(self.image_rpmlib, 'log', 'log.0000000001')
-        if not os.path.exists(rpmlib_log):
-            bb.utils.mkdirhier(os.path.join(self.image_rpmlib, 'log'))
-            open(rpmlib_log, 'w+').close()
+        if self.rpm_version == 5:
+            rpmlib_log = os.path.join(self.image_rpmlib, 'log', 'log.0000000001')
+            if not os.path.exists(rpmlib_log):
+                bb.utils.mkdirhier(os.path.join(self.image_rpmlib, 'log'))
+                open(rpmlib_log, 'w+').close()
 
-        DB_CONFIG_CONTENT = "# ================ Environment\n" \
-            "set_data_dir .\n" \
-            "set_create_dir .\n" \
-            "set_lg_dir ./log\n" \
-            "set_tmp_dir ./tmp\n" \
-            "set_flags db_log_autoremove on\n" \
-            "\n" \
-            "# -- thread_count must be >= 8\n" \
-            "set_thread_count 64\n" \
-            "\n" \
-            "# ================ Logging\n" \
-            "\n" \
-            "# ================ Memory Pool\n" \
-            "set_cachesize 0 1048576 0\n" \
-            "set_mp_mmapsize 268435456\n" \
-            "\n" \
-            "# ================ Locking\n" \
-            "set_lk_max_locks 16384\n" \
-            "set_lk_max_lockers 16384\n" \
-            "set_lk_max_objects 16384\n" \
-            "mutex_set_max 163840\n" \
-            "\n" \
-            "# ================ Replication\n"
+            DB_CONFIG_CONTENT = "# ================ Environment\n" \
+                "set_data_dir .\n" \
+                "set_create_dir .\n" \
+                "set_lg_dir ./log\n" \
+                "set_tmp_dir ./tmp\n" \
+                "set_flags db_log_autoremove on\n" \
+                "\n" \
+                "# -- thread_count must be >= 8\n" \
+                "set_thread_count 64\n" \
+                "\n" \
+                "# ================ Logging\n" \
+                "\n" \
+                "# ================ Memory Pool\n" \
+                "set_cachesize 0 1048576 0\n" \
+                "set_mp_mmapsize 268435456\n" \
+                "\n" \
+                "# ================ Locking\n" \
+                "set_lk_max_locks 16384\n" \
+                "set_lk_max_lockers 16384\n" \
+                "set_lk_max_objects 16384\n" \
+                "mutex_set_max 163840\n" \
+                "\n" \
+                "# ================ Replication\n"
 
-        db_config_dir = os.path.join(self.image_rpmlib, 'DB_CONFIG')
-        if not os.path.exists(db_config_dir):
-            open(db_config_dir, 'w+').write(DB_CONFIG_CONTENT)
+            db_config_dir = os.path.join(self.image_rpmlib, 'DB_CONFIG')
+            if not os.path.exists(db_config_dir):
+                open(db_config_dir, 'w+').write(DB_CONFIG_CONTENT)
 
         # Create database so that smart doesn't complain (lazy init)
-        cmd = "%s --root %s --dbpath /var/lib/rpm -qa > /dev/null" % (
-              self.rpm_cmd,
-              self.target_rootfs)
+        opt = "-qa"
+        if self.rpm_version == 4:
+            opt = "--initdb"
+        cmd = "%s --root %s --dbpath /var/lib/rpm %s > /dev/null" % (
+              self.rpm_cmd, self.target_rootfs, opt)
         try:
             subprocess.check_output(cmd, stderr=subprocess.STDOUT, shell=True)
         except subprocess.CalledProcessError as e:
@@ -798,17 +822,17 @@ class RpmPM(PackageManager):
                            self.d.getVar('localstatedir', True))
         cmd = 'config --set rpm-extra-macros._tmppath=/install/tmp'
 
-        prefer_color = self.d.getVar('RPM_PREFER_COLOR', True)
+        prefer_color = self.d.getVar('RPM_PREFER_ELF_ARCH', True)
         if prefer_color:
-            if prefer_color not in ['0', '1', '2', '3']:
-                bb.fatal("Invalid RPM_PREFER_COLOR: %s, it should be one of:\n"
+            if prefer_color not in ['0', '1', '2', '4']:
+                bb.fatal("Invalid RPM_PREFER_ELF_ARCH: %s, it should be one of:\n"
                         "\t1: ELF32 wins\n"
                         "\t2: ELF64 wins\n"
-                        "\t3: ELF64 N32 wins (mips64 or mips64el only)" %
+                        "\t4: ELF64 N32 wins (mips64 or mips64el only)" %
                         prefer_color)
-            if prefer_color == "3" and self.d.getVar("TUNE_ARCH", True) not in \
+            if prefer_color == "4" and self.d.getVar("TUNE_ARCH", True) not in \
                                     ['mips64', 'mips64el']:
-                bb.fatal("RPM_PREFER_COLOR = \"3\" is for mips64 or mips64el "
+                bb.fatal("RPM_PREFER_ELF_ARCH = \"4\" is for mips64 or mips64el "
                          "only.")
             self._invoke_smart('config --set rpm-extra-macros._prefer_color=%s'
                         % prefer_color)
@@ -818,6 +842,9 @@ class RpmPM(PackageManager):
         # Write common configuration for host and target usage
         self._invoke_smart('config --set rpm-nolinktos=1')
         self._invoke_smart('config --set rpm-noparentdirs=1')
+        check_signature = self.d.getVar('RPM_CHECK_SIGNATURES', True)
+        if check_signature and check_signature.strip() == "0":
+            self._invoke_smart('config --set rpm-check-signatures=false')
         for i in self.d.getVar('BAD_RECOMMENDATIONS', True).split():
             self._invoke_smart('flag --set ignore-recommends %s' % i)
 
@@ -856,6 +883,11 @@ class RpmPM(PackageManager):
         # If we ever run into needing more the 899 scripts, we'll have to.
         # change num to start with 1000.
         #
+        if self.rpm_version == 4:
+            scriptletcmd = "$2 $3 $4\n"
+        else:
+            scriptletcmd = "$2 $1/$3 $4\n"
+
         SCRIPTLET_FORMAT = "#!/bin/bash\n" \
             "\n" \
             "export PATH=%s\n" \
@@ -866,7 +898,7 @@ class RpmPM(PackageManager):
             "export INTERCEPT_DIR=%s\n" \
             "export NATIVE_ROOT=%s\n" \
             "\n" \
-            "$2 $1/$3 $4\n" \
+            + scriptletcmd + \
             "if [ $? -ne 0 ]; then\n" \
             "  if [ $4 -eq 1 ]; then\n" \
             "    mkdir -p $1/etc/rpm-postinsts\n" \
@@ -1445,6 +1477,10 @@ class DpkgPM(PackageManager):
 
         self.apt_args = d.getVar("APT_ARGS", True)
 
+        self.all_arch_list = self.d.getVar('PACKAGE_ARCHS', True).split()
+        all_mlb_pkg_arch_list = (self.d.getVar('ALL_MULTILIB_PACKAGE_ARCHS', True) or "").replace('-', '_').split()
+        self.all_arch_list.extend(arch for arch in all_mlb_pkg_arch_list if arch not in self.all_arch_list)
+
         self._create_configs(archs, base_archs)
 
         self.indexer = DpkgIndexer(self.d, self.deploy_dir)
@@ -1602,8 +1638,8 @@ class DpkgPM(PackageManager):
         sources_conf = os.path.join("%s/etc/apt/sources.list"
                                     % self.target_rootfs)
         arch_list = []
-        archs = self.d.getVar('PACKAGE_ARCHS', True)
-        for arch in archs.split():
+
+        for arch in self.all_arch_list:
             if not os.path.exists(os.path.join(self.deploy_dir, arch)):
                 continue
             arch_list.append(arch)
@@ -1626,7 +1662,7 @@ class DpkgPM(PackageManager):
         bb.utils.mkdirhier(self.apt_conf_dir + "/apt.conf.d/")
 
         arch_list = []
-        for arch in archs.split():
+        for arch in self.all_arch_list:
             if not os.path.exists(os.path.join(self.deploy_dir, arch)):
                 continue
             arch_list.append(arch)
@@ -1655,15 +1691,25 @@ class DpkgPM(PackageManager):
                 sources_file.write("deb file:%s/ ./\n" %
                                    os.path.join(self.deploy_dir, arch))
 
+        base_arch_list = base_archs.split()
+        multilib_variants = self.d.getVar("MULTILIB_VARIANTS", True);
+        for variant in multilib_variants.split():
+            if variant == "lib32":
+                base_arch_list.append("i386")
+            elif variant == "lib64":
+                base_arch_list.append("amd64")
+
         with open(self.apt_conf_file, "w+") as apt_conf:
             with open(self.d.expand("${STAGING_ETCDIR_NATIVE}/apt/apt.conf.sample")) as apt_conf_sample:
                 for line in apt_conf_sample.read().split("\n"):
-                    line = re.sub("Architecture \".*\";",
-                                  "Architecture \"%s\";" % base_archs, line)
-                    line = re.sub("#ROOTFS#", self.target_rootfs, line)
-                    line = re.sub("#APTCONF#", self.apt_conf_dir, line)
-
-                    apt_conf.write(line + "\n")
+                    match_arch = re.match("  Architecture \".*\";$", line)
+                    if match_arch:
+                        for base_arch in base_arch_list:
+                            apt_conf.write("  Architecture \"%s\";\n" % base_arch)
+                    else:
+                        line = re.sub("#ROOTFS#", self.target_rootfs, line)
+                        line = re.sub("#APTCONF#", self.apt_conf_dir, line)
+                        apt_conf.write(line + "\n")
 
         target_dpkg_dir = "%s/var/lib/dpkg" % self.target_rootfs
         bb.utils.mkdirhier(os.path.join(target_dpkg_dir, "info"))

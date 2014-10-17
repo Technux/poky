@@ -263,7 +263,7 @@ class VariableHistory(object):
                     flag = ''
                 o.write("#   %s %s:%s%s\n#     %s\"%s\"\n" % (event['op'], event['file'], event['line'], display_func, flag, re.sub('\n', '\n#     ', event['detail'])))
             if len(history) > 1:
-                o.write("# computed:\n")
+                o.write("# pre-expansion value:\n")
                 o.write('#   "%s"\n' % (commentVal))
         else:
             o.write("#\n# $%s\n#   [no history recorded]\n#\n" % var)
@@ -619,7 +619,8 @@ class DataSmart(MutableMapping):
                 cachename = var + "[" + flag + "]"
             value = self.expand(value, cachename)
         if value and flag == "_content" and local_var is not None and "_removeactive" in local_var:
-            filtered = filter(lambda v: v not in local_var["_removeactive"],
+            removes = [self.expand(r) for r in local_var["_removeactive"]]
+            filtered = filter(lambda v: v not in removes,
                               value.split(" "))
             value = " ".join(filtered)
             if expand:

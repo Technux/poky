@@ -4,9 +4,9 @@ require xserver-xorg.inc
 SRC_URI += "file://crosscompile.patch \
             file://fix_open_max_preprocessor_error.patch \
             file://mips64-compiler.patch \
-            file://aarch64.patch \
             file://xorg-CVE-2013-6424.patch \
             file://xshmfence-option.patch \
+            file://present-module.patch \
            "
 
 SRC_URI[md5sum] = "e4c70262ed89764be8f8f5d699ed9227"

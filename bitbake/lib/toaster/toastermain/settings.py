@@ -232,26 +232,26 @@ TEMPLATE_CONTEXT_PROCESSORS = ('django.contrib.auth.context_processors.auth',
 
 INSTALLED_APPS = (
     #'django.contrib.sites',
-    #'django.contrib.messages',
     'django.contrib.staticfiles',
-    # Uncomment the next line to enable the admin:
-    # 'django.contrib.admin',
     # Uncomment the next line to enable admin documentation:
     # 'django.contrib.admindocs',
     'django.contrib.humanize',
     'orm',
     'toastermain',
-    'toastergui',
-    'bldviewer',
     'south',
-    'bldcontrol',
 )
+
+SOUTH_TESTS_MIGRATE = False
 
 # if we run in managed mode, we need user support
 if MANAGED:
     INSTALLED_APPS = ('django.contrib.auth',
     'django.contrib.contenttypes',
-    'django.contrib.sessions',) + INSTALLED_APPS
+    'django.contrib.messages',
+    'django.contrib.sessions',
+    # Uncomment the next line to enable the admin:
+    'django.contrib.admin',
+        ) + INSTALLED_APPS
 
 
 # We automatically detect and install applications here if
@@ -261,7 +261,7 @@ currentdir = os.path.dirname(__file__)
 for t in os.walk(os.path.dirname(currentdir)):
     modulename = os.path.basename(t[0])
     if ("views.py" in t[2] or "models.py" in t[2]) and not modulename in INSTALLED_APPS:
-        INSTALLED_APPS.append(modulename)
+        INSTALLED_APPS = INSTALLED_APPS + (modulename,)
 
 # A sample logging configuration. The only tangible logging
 # performed by this configuration is to send an email to

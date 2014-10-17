@@ -543,8 +543,8 @@ def verify_checksum(ud, d):
 
     if ud.method.recommends_checksum(ud):
         # If strict checking enabled and neither sum defined, raise error
-        strict = d.getVar("BB_STRICT_CHECKSUM", True) or None
-        if strict and not (ud.md5_expected or ud.sha256_expected):
+        strict = d.getVar("BB_STRICT_CHECKSUM", True) or "0"
+        if (strict == "1") and not (ud.md5_expected or ud.sha256_expected):
             logger.error('No checksum specified for %s, please add at least one to the recipe:\n'
                              'SRC_URI[%s] = "%s"\nSRC_URI[%s] = "%s"' %
                              (ud.localpath, ud.md5_name, md5data,
@@ -1264,8 +1264,13 @@ class FetchMethod(object):
                     # items.  So, only do so for file:// entries.
                     if urldata.type == "file" and urldata.path.find("/") != -1:
                        destdir = urldata.path.rsplit("/", 1)[0]
+                       if urldata.parm.get('subdir') != None:
+                          destdir = urldata.parm.get('subdir') + "/" + destdir
                     else:
-                       destdir = "."
+                       if urldata.parm.get('subdir') != None:
+                          destdir = urldata.parm.get('subdir')
+                       else:
+                          destdir = "."
                     bb.utils.mkdirhier("%s/%s" % (rootdir, destdir))
                     cmd = 'cp -f %s %s/%s/' % (file, rootdir, destdir)
 

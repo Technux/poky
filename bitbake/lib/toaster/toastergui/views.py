@@ -20,6 +20,7 @@
 # 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 
 import operator,re
+import HTMLParser
 
 from django.db.models import Q, Sum
 from django.db import IntegrityError
@@ -32,6 +33,7 @@ from django.core.urlresolvers import reverse
 from django.core.paginator import Paginator, EmptyPage, PageNotAnInteger
 from django.http import HttpResponseBadRequest, HttpResponseNotFound
 from django.utils import timezone
+from django.utils.html import escape
 from datetime import timedelta
 from django.utils import formats
 import json
@@ -200,6 +202,22 @@ def _get_queryset(model, queryset, filter_string, search_term, ordering_string, 
     # insure only distinct records (e.g. from multiple search hits) are returned
     return queryset.distinct()
 
+# returns the value of entries per page and the name of the applied sorting field.
+# if the value is given explicitly as a GET parameter it will be the first selected,
+# otherwise the cookie value will be used.
+def _get_parameters_values(request, default_count, default_order):
+    pagesize = request.GET.get('count', request.COOKIES.get('count', default_count))
+    orderby = request.GET.get('orderby', request.COOKIES.get('orderby', default_order))
+    return (pagesize, orderby)
+
+
+# set cookies for parameters. this is usefull in case parameters are set
+# manually from the GET values of the link
+def _save_parameters_cookies(response, pagesize, orderby, request):
+    html_parser = HTMLParser.HTMLParser()
+    response.set_cookie(key='count', value=pagesize, path=request.path)
+    response.set_cookie(key='orderby', value=html_parser.unescape(orderby), path=request.path)
+    return response
 
 # shows the "all builds" page
 def builds(request):
@@ -207,7 +225,8 @@ def builds(request):
     # define here what parameters the view needs in the GET portion in order to
     # be able to display something.  'count' and 'page' are mandatory for all views
     # that use paginators.
-    mandatory_parameters = { 'count': 10,  'page' : 1, 'orderby' : 'completed_on:-' };
+    (pagesize, orderby) = _get_parameters_values(request, 10, 'completed_on:-')
+    mandatory_parameters = { 'count': pagesize,  'page' : 1, 'orderby' : orderby }
     retval = _verify_parameters( request.GET, mandatory_parameters )
     if retval:
         return _redirect_parameters( 'all-builds', request.GET, mandatory_parameters)
@@ -220,21 +239,10 @@ def builds(request):
     queryset = _get_queryset(Build, queryset_all, filter_string, search_term, ordering_string, '-completed_on')
 
     # retrieve the objects that will be displayed in the table; builds a paginator and gets a page range to display
-    build_info = _build_page_range(Paginator(queryset, request.GET.get('count', 10)),request.GET.get('page', 1))
+    build_info = _build_page_range(Paginator(queryset, pagesize), request.GET.get('page', 1))
 
     # build view-specific information; this is rendered specifically in the builds page, at the top of the page (i.e. Recent builds)
     build_mru = Build.objects.filter(completed_on__gte=(timezone.now()-timedelta(hours=24))).order_by("-started_on")[:3]
-    for b in [ x for x in build_mru if x.outcome == Build.IN_PROGRESS ]:
-        tf = Task.objects.filter(build = b)
-        tfc = tf.count()
-        if tfc > 0:
-            b.completeper = tf.exclude(order__isnull=True).count()*100/tf.count()
-        else:
-            b.completeper = 0
-
-        b.eta = 0
-        if b.completeper > 0:
-            b.eta = timezone.now() + ((timezone.now() - b.started_on)*(100-b.completeper)/b.completeper)
 
     # set up list of fstypes for each build
     fstypes_map = {};
@@ -379,7 +387,9 @@ def builds(request):
                 ]
             }
 
-    return render(request, template, context)
+    response = render(request, template, context)
+    _save_parameters_cookies(response, pagesize, orderby, request)
+    return response
 
 
 ##
@@ -548,8 +558,8 @@ def recipe(request, build_id, recipe_id):
 
 def target_common( request, build_id, target_id, variant ):
     template = "target.html"
-    default_orderby = 'name:+';
-    mandatory_parameters = { 'count': 25,  'page' : 1, 'orderby':'name:+'};
+    (pagesize, orderby) = _get_parameters_values(request, 25, 'name:+')
+    mandatory_parameters = { 'count': pagesize,  'page' : 1, 'orderby': orderby }
     retval = _verify_parameters( request.GET, mandatory_parameters )
     if retval:
         return _redirect_parameters(
@@ -565,8 +575,7 @@ def target_common( request, build_id, target_id, variant ):
     packages_sum =  queryset.aggregate( Sum( 'installed_size' ))
     queryset = _get_queryset(
             Package, queryset, filter_string, search_term, ordering_string, 'name' )
-    packages = _build_page_range( Paginator(
-            queryset, request.GET.get( 'count', 25 )),request.GET.get( 'page', 1 ))
+    packages = _build_page_range( Paginator(queryset, pagesize), request.GET.get( 'page', 1 ))
 
     # bring in package dependencies
     for p in packages.object_list:
@@ -690,7 +699,7 @@ his package',
         'objects'              : packages,
         'packages_sum'         : packages_sum[ 'installed_size__sum' ],
         'object_search_display': "packages included",
-        'default_orderby'      : default_orderby,
+        'default_orderby'      : orderby,
         'tablecols'            : [
                     tc_package,
                     tc_packageVersion,
@@ -707,7 +716,10 @@ his package',
                     tc_layerDir,
                 ]
         }
-    return( render( request, template, context ))
+
+    response = render(request, template, context)
+    _save_parameters_cookies(response, pagesize, orderby, request)
+    return response
 
 def target( request, build_id, target_id ):
     return( target_common( request, build_id, target_id, "target" ))
@@ -730,7 +742,6 @@ class LazyEncoder(json.JSONEncoder):
         return super(LazyEncoder, self).default(obj)
 
 from toastergui.templatetags.projecttags import filtered_filesizeformat
-from django import template
 import os
 def _get_dir_entries(build_id, target_id, start):
     node_str = {
@@ -785,9 +796,7 @@ def _get_dir_entries(build_id, target_id, start):
                 # don't use resolved path from above, show immediate link-to
                 if o.sym_target_id != "" and o.sym_target_id != None:
                     entry['link_to'] = Target_File.objects.get(pk=o.sym_target_id).path
-            t = template.Template('{% load projecttags %} {{ size|filtered_filesizeformat }}')
-            c = template.Context({'size': o.size})
-            entry['size'] = str(t.render(c))
+            entry['size'] = filtered_filesizeformat(o.size)
             if entry['link_to'] != None:
                 entry['permission'] = node_str[o.inodetype] + o.permission
             else:
@@ -796,7 +805,10 @@ def _get_dir_entries(build_id, target_id, start):
             entry['group'] = o.group
             response.append(entry)
 
-        except:
+        except Exception as e:
+            print "Exception ", e
+            import traceback
+            traceback.print_exc(e)
             pass
 
     # sort by directories first, then by name
@@ -889,32 +901,31 @@ def tasks_common(request, build_id, variant, task_anchor):
         title_variant='Time'
         object_search_display="time data"
         filter_search_display="tasks"
-        mandatory_parameters = { 'count': 25,  'page' : 1, 'orderby':'elapsed_time:-'};
-        default_orderby = 'elapsed_time:-';
+        (pagesize, orderby) = _get_parameters_values(request, 25, 'elapsed_time:-')
     elif 'diskio'    == variant:
         title_variant='Disk I/O'
         object_search_display="disk I/O data"
         filter_search_display="tasks"
-        mandatory_parameters = { 'count': 25,  'page' : 1, 'orderby':'disk_io:-'};
-        default_orderby = 'disk_io:-';
+        (pagesize, orderby) = _get_parameters_values(request, 25, 'disk_io:-')
     elif 'cpuusage'  == variant:
         title_variant='CPU usage'
         object_search_display="CPU usage data"
         filter_search_display="tasks"
-        mandatory_parameters = { 'count': 25,  'page' : 1, 'orderby':'cpu_usage:-'};
-        default_orderby = 'cpu_usage:-';
+        (pagesize, orderby) = _get_parameters_values(request, 25, 'cpu_usage:-')
     else :
         title_variant='Tasks'
         object_search_display="tasks"
         filter_search_display="tasks"
-        mandatory_parameters = { 'count': 25,  'page' : 1, 'orderby':'order:+'};
-        default_orderby = 'order:+';
+        (pagesize, orderby) = _get_parameters_values(request, 25, 'order:+')
+
+
+    mandatory_parameters = { 'count': pagesize,  'page' : 1, 'orderby': orderby }
 
     template = 'tasks.html'
     retval = _verify_parameters( request.GET, mandatory_parameters )
     if retval:
         if task_anchor:
-	        mandatory_parameters['anchor']=task_anchor
+            mandatory_parameters['anchor']=task_anchor
         return _redirect_parameters( variant, request.GET, mandatory_parameters, build_id = build_id)
     (filter_string, search_term, ordering_string) = _search_tuple(request, Task)
     queryset_all = Task.objects.filter(build=build_id).exclude(order__isnull=True).exclude(outcome=Task.OUTCOME_NA)
@@ -928,22 +939,22 @@ def tasks_common(request, build_id, variant, task_anchor):
     else:
         queryset = _get_queryset(Task, queryset_all, filter_string, search_term, ordering_string, 'order')
 
-	# compute the anchor's page
+    # compute the anchor's page
     if anchor:
-	    request.GET = request.GET.copy()
+        request.GET = request.GET.copy()
         del request.GET['anchor']
         i=0
         a=int(anchor)
-		count_per_page=int(request.GET.get('count', 100))
+        count_per_page=int(pagesize)
         for task in queryset.iterator():
             if a == task.order:
-				new_page= (i / count_per_page ) + 1
-				request.GET.__setitem__('page', new_page)
-				mandatory_parameters['page']=new_page
-				return _redirect_parameters( variant, request.GET, mandatory_parameters, build_id = build_id)
+                new_page= (i / count_per_page ) + 1
+                request.GET.__setitem__('page', new_page)
+                mandatory_parameters['page']=new_page
+                return _redirect_parameters( variant, request.GET, mandatory_parameters, build_id = build_id)
             i += 1
 
-    tasks = _build_page_range(Paginator(queryset, request.GET.get('count', 100)),request.GET.get('page', 1))
+    tasks = _build_page_range(Paginator(queryset, pagesize),request.GET.get('page', 1))
 
     # define (and modify by variants) the 'tablecols' members
     tc_order={
@@ -1074,7 +1085,7 @@ def tasks_common(request, build_id, variant, task_anchor):
                 'title': title_variant,
                 'build': Build.objects.filter(pk=build_id)[0],
                 'objects': tasks,
-                'default_orderby' : default_orderby,
+                'default_orderby' : orderby,
                 'search_term': search_term,
                 'total_count': queryset_with_search.count(),
                 'tablecols':[
@@ -1091,7 +1102,9 @@ def tasks_common(request, build_id, variant, task_anchor):
                     tc_log,
                 ]}
 
-    return render(request, template, context)
+    response = render(request, template, context)
+    _save_parameters_cookies(response, pagesize, orderby, request)
+    return response
 
 def tasks(request, build_id):
     return tasks_common(request, build_id, 'tasks', '')
@@ -1111,7 +1124,8 @@ def cpuusage(request, build_id):
 
 def recipes(request, build_id):
     template = 'recipes.html'
-    mandatory_parameters = { 'count': 100,  'page' : 1, 'orderby':'name:+'};
+    (pagesize, orderby) = _get_parameters_values(request, 100, 'name:+')
+    mandatory_parameters = { 'count': pagesize,  'page' : 1, 'orderby' : orderby }
     retval = _verify_parameters( request.GET, mandatory_parameters )
     if retval:
         return _redirect_parameters( 'recipes', request.GET, mandatory_parameters, build_id = build_id)
@@ -1119,7 +1133,7 @@ def recipes(request, build_id):
     queryset = Recipe.objects.filter(layer_version__id__in=Layer_Version.objects.filter(build=build_id))
     queryset = _get_queryset(Recipe, queryset, filter_string, search_term, ordering_string, 'name')
 
-    recipes = _build_page_range(Paginator(queryset, request.GET.get('count', 100)),request.GET.get('page', 1))
+    recipes = _build_page_range(Paginator(queryset, pagesize),request.GET.get('page', 1))
 
     # prefetch the forward and reverse recipe dependencies
     deps = { }; revs = { }
@@ -1218,8 +1232,9 @@ def recipes(request, build_id):
             ]
         }
 
-    return render(request, template, context)
-
+    response = render(request, template, context)
+    _save_parameters_cookies(response, pagesize, orderby, request)
+    return response
 
 def configuration(request, build_id):
     template = 'configuration.html'
@@ -1258,7 +1273,8 @@ def configuration(request, build_id):
 
 def configvars(request, build_id):
     template = 'configvars.html'
-    mandatory_parameters = { 'count': 100,  'page' : 1, 'orderby':'variable_name:+', 'filter':'description__regex:.+'};
+    (pagesize, orderby) = _get_parameters_values(request, 100, 'variable_name:+')
+    mandatory_parameters = { 'count': pagesize,  'page' : 1, 'orderby' : orderby, 'filter' : 'description__regex:.+' }
     retval = _verify_parameters( request.GET, mandatory_parameters )
     (filter_string, search_term, ordering_string) = _search_tuple(request, Variable)
     if retval:
@@ -1273,7 +1289,7 @@ def configvars(request, build_id):
     # remove records where the value is empty AND there are no history files
     queryset = queryset.exclude(variable_value='',vhistory__file_name__isnull=True)
 
-    variables = _build_page_range(Paginator(queryset, request.GET.get('count', 50)), request.GET.get('page', 1))
+    variables = _build_page_range(Paginator(queryset, pagesize), request.GET.get('page', 1))
 
     # show all matching files (not just the last one)
     file_filter= search_term + ":"
@@ -1339,12 +1355,14 @@ def configvars(request, build_id):
                 ],
             }
 
-    return render(request, template, context)
-
+    response = render(request, template, context)
+    _save_parameters_cookies(response, pagesize, orderby, request)
+    return response
 
 def bpackage(request, build_id):
     template = 'bpackage.html'
-    mandatory_parameters = { 'count': 100,  'page' : 1, 'orderby':'name:+'};
+    (pagesize, orderby) = _get_parameters_values(request, 100, 'name:+')
+    mandatory_parameters = { 'count' : pagesize,  'page' : 1, 'orderby' : orderby }
     retval = _verify_parameters( request.GET, mandatory_parameters )
     if retval:
         return _redirect_parameters( 'packages', request.GET, mandatory_parameters, build_id = build_id)
@@ -1352,7 +1370,7 @@ def bpackage(request, build_id):
     queryset = Package.objects.filter(build = build_id).filter(size__gte=0)
     queryset = _get_queryset(Package, queryset, filter_string, search_term, ordering_string, 'name')
 
-    packages = _build_page_range(Paginator(queryset, request.GET.get('count', 100)),request.GET.get('page', 1))
+    packages = _build_page_range(Paginator(queryset, pagesize),request.GET.get('page', 1))
 
     context = {
         'objectname': 'packages built',
@@ -1432,7 +1450,9 @@ def bpackage(request, build_id):
             ]
         }
 
-    return render(request, template, context)
+    response = render(request, template, context)
+    _save_parameters_cookies(response, pagesize, orderby, request)
+    return response
 
 def bfile(request, build_id, package_id):
     template = 'bfile.html'
@@ -1587,7 +1607,8 @@ def package_built_detail(request, build_id, package_id):
 
     # follow convention for pagination w/ search although not used for this view
     queryset = Package_File.objects.filter(package_id__exact=package_id)
-    mandatory_parameters = { 'count': 25,  'page' : 1, 'orderby':'path:+'};
+    (pagesize, orderby) = _get_parameters_values(request, 25, 'path:+')
+    mandatory_parameters = { 'count': pagesize,  'page' : 1, 'orderby' : orderby }
     retval = _verify_parameters( request.GET, mandatory_parameters )
     if retval:
         return _redirect_parameters( 'package_built_detail', request.GET, mandatory_parameters, build_id = build_id, package_id = package_id)
@@ -1618,7 +1639,10 @@ def package_built_detail(request, build_id, package_id):
     }
     if paths.all().count() < 2:
         context['disable_sort'] = True;
-    return render(request, template, context)
+
+    response = render(request, template, context)
+    _save_parameters_cookies(response, pagesize, orderby, request)
+    return response
 
 def package_built_dependencies(request, build_id, package_id):
     template = "package_built_dependencies.html"
@@ -1643,9 +1667,9 @@ def package_included_detail(request, build_id, target_id, package_id):
     if Build.objects.filter(pk=build_id).count() == 0 :
         return redirect(builds)
 
-
     # follow convention for pagination w/ search although not used for this view
-    mandatory_parameters = { 'count': 25,  'page' : 1, 'orderby':'path:+'};
+    (pagesize, orderby) = _get_parameters_values(request, 25, 'path:+')
+    mandatory_parameters = { 'count': pagesize,  'page' : 1, 'orderby' : orderby }
     retval = _verify_parameters( request.GET, mandatory_parameters )
     if retval:
         return _redirect_parameters( 'package_included_detail', request.GET, mandatory_parameters, build_id = build_id, target_id = target_id, package_id = package_id)
@@ -1680,8 +1704,10 @@ def package_included_detail(request, build_id, target_id, package_id):
             ]
     }
     if paths.all().count() < 2:
-        context['disable_sort'] = True;
-    return render(request, template, context)
+        context['disable_sort'] = True
+    response = render(request, template, context)
+    _save_parameters_cookies(response, pagesize, orderby, request)
+    return response
 
 def package_included_dependencies(request, build_id, target_id, package_id):
     template = "package_included_dependencies.html"
@@ -1710,7 +1736,8 @@ def package_included_reverse_dependencies(request, build_id, target_id, package_
     if Build.objects.filter(pk=build_id).count() == 0 :
         return redirect(builds)
 
-    mandatory_parameters = { 'count': 25,  'page' : 1, 'orderby':'package__name:+'};
+    (pagesize, orderby) = _get_parameters_values(request, 25, 'package__name:+')
+    mandatory_parameters = { 'count': pagesize,  'page' : 1, 'orderby': orderby }
     retval = _verify_parameters( request.GET, mandatory_parameters )
     if retval:
         return _redirect_parameters( 'package_included_reverse_dependencies', request.GET, mandatory_parameters, build_id = build_id, target_id = target_id, package_id = package_id)
@@ -1752,8 +1779,10 @@ def package_included_reverse_dependencies(request, build_id, target_id, package_
             ]
     }
     if objects.all().count() < 2:
-        context['disable_sort'] = True;
-    return render(request, template, context)
+        context['disable_sort'] = True
+    response = render(request, template, context)
+    _save_parameters_cookies(response, pagesize, orderby, request)
+    return response
 
 def image_information_dir(request, build_id, target_id, packagefile_id):
     # stubbed for now
@@ -1772,6 +1801,7 @@ if toastermain.settings.MANAGED:
     from django.contrib.auth.decorators import login_required
 
     from orm.models import Project, ProjectLayer, ProjectTarget, ProjectVariable
+    from orm.models import Branch, LayerSource, ToasterSetting, Release, Machine
     from bldcontrol.models import BuildRequest
 
     import traceback
@@ -1780,10 +1810,13 @@ if toastermain.settings.MANAGED:
 
     # the context processor that supplies data used across all the pages
     def managedcontextprocessor(request):
-        return {
+        ret = {
             "projects": Project.objects.all(),
             "MANAGED" : toastermain.settings.MANAGED
         }
+        if 'project_id' in request.session:
+            ret['project'] = Project.objects.get(pk = request.session['project_id'])
+        return ret
 
     # new project
     def newproject(request):
@@ -1791,6 +1824,8 @@ if toastermain.settings.MANAGED:
         context = {
             'email': request.user.email if request.user.is_authenticated() else '',
             'username': request.user.username if request.user.is_authenticated() else '',
+            'releases': Release.objects.order_by("id"),
+            'defaultbranch': ToasterSetting.objects.get(name = "DEFAULT_RELEASE").value,
         }
 
 
@@ -1816,15 +1851,14 @@ if toastermain.settings.MANAGED:
 
                 #  save the project
                 prj = Project.objects.create_project(name = request.POST['projectname'],
-                    branch = request.POST['projectversion'].split(" ")[0],
-                    short_description=request.POST['projectversion'].split(" ")[1:])
+                    release = Release.objects.get(pk = request.POST['projectversion']))
                 prj.user_id = request.user.pk
                 prj.save()
                 return redirect(reverse(project, args = (prj.pk,)))
 
             except (IntegrityError, BadParameterException) as e:
                 # fill in page with previously submitted values
-                map(lambda x: context.__setitem__(x, request.POST[x]), mandatory_fields)
+                map(lambda x: context.__setitem__(x, request.POST.get(x, "-- missing")), mandatory_fields)
                 if isinstance(e, IntegrityError) and "username" in str(e):
                     context['alert'] = "Your chosen username is already used"
                 else:
@@ -1846,10 +1880,13 @@ if toastermain.settings.MANAGED:
         except User.DoesNotExist:
             puser = None
 
+        # we use implicit knowledge of the current user's project to filter layer information, e.g.
+        request.session['project_id'] = prj.id
+
         context = {
             "project" : prj,
             #"buildrequests" : prj.buildrequest_set.filter(state=BuildRequest.REQ_QUEUED),
-            "buildrequests" : map(lambda x: (x, {"machine" : x.brvariable_set.filter(name="MACHINE")[0]}), prj.buildrequest_set.order_by("-pk")),
+            "buildrequests" : map(lambda x: (x, {"machine" : x.brvariable_set.filter(name="MACHINE")[0]}), prj.buildrequest_set.filter(state__lt = BuildRequest.REQ_INPROGRESS).order_by("-pk")),
             "builds" : prj.build_set.all(),
             "puser": puser,
         }
@@ -1911,7 +1948,7 @@ if toastermain.settings.MANAGED:
             # return all project settings
             return HttpResponse(json.dumps( {
                 "error": "ok",
-                "layers": map(lambda x: (x.name, x.giturl), prj.projectlayer_set.all()),
+                "layers": map(lambda x: (x.layercommit.layer.name, x.layercommit.layer.layer_index_url), prj.projectlayer_set.all()),
                 "targets" : map(lambda x: {"target" : x.target, "task" : x.task, "pk": x.pk}, prj.projecttarget_set.all()),
                 "variables": map(lambda x: (x.name, x.value), prj.projectvariable_set.all()),
                 }), content_type = "application/json")
@@ -1919,7 +1956,420 @@ if toastermain.settings.MANAGED:
         except Exception as e:
             return HttpResponse(json.dumps({"error":str(e) + "\n" + traceback.format_exc()}), content_type = "application/json")
 
+    def importlayer(request):
+        template = "importlayer.html"
+        context = {
+        }
+        return render(request, template, context)
 
+    def layers(request):
+        template = "layers.html"
+        # define here what parameters the view needs in the GET portion in order to
+        # be able to display something.  'count' and 'page' are mandatory for all views
+        # that use paginators.
+        mandatory_parameters = { 'count': 10,  'page' : 1, 'orderby' : 'layer__name:+' };
+        retval = _verify_parameters( request.GET, mandatory_parameters )
+        if retval:
+            return _redirect_parameters( 'layers', request.GET, mandatory_parameters)
+
+        # boilerplate code that takes a request for an object type and returns a queryset
+        # for that object type. copypasta for all needed table searches
+        (filter_string, search_term, ordering_string) = _search_tuple(request, Layer_Version)
+
+        queryset_all = Layer_Version.objects.all()
+        if 'project_id' in request.session:
+            queryset_all = queryset_all.filter(up_branch__in = Branch.objects.filter(name = Project.objects.get(pk = request.session['project_id']).release.name))
+
+        queryset_with_search = _get_queryset(Layer_Version, queryset_all, None, search_term, ordering_string, '-layer__name')
+        queryset = _get_queryset(Layer_Version, queryset_all, filter_string, search_term, ordering_string, '-layer__name')
+
+        # retrieve the objects that will be displayed in the table; layers a paginator and gets a page range to display
+        layer_info = _build_page_range(Paginator(queryset, request.GET.get('count', 10)),request.GET.get('page', 1))
+
+
+        context = {
+            'objects' : layer_info,
+            'objectname' : "layers",
+            'default_orderby' : 'layer__name:+',
+            'total_count': queryset_with_search.count(),
+
+            'tablecols' : [
+                {   'name': 'Layer',
+                    'orderfield': _get_toggle_order(request, "layer__name"),
+                    'ordericon' : _get_toggle_order_icon(request, "layer__name"),
+                },
+                {   'name': 'Description',
+                    'dclass': 'span4',
+                    'clclass': 'description',
+                },
+                {   'name': 'Layer source',
+                    'clclass': 'source',
+                    'qhelp': "Where the layer is coming from, for example, if it's part of the OpenEmbedded collection of layers or if it's a layer you have imported",
+                    'orderfield': _get_toggle_order(request, "layer_source__name"),
+                    'ordericon': _get_toggle_order_icon(request, "layer_source__name"),
+                    'filter': {
+                        'class': 'layer',
+                        'label': 'Show:',
+                        'options': map(lambda x: (x.name, 'layer_source__pk:' + str(x.id), queryset_with_search.filter(layer_source__pk = x.id).count() ), LayerSource.objects.all()),
+                    }
+                },
+                {   'name': 'Git repository URL',
+                    'dclass': 'span6',
+                    'clclass': 'git-repo', 'hidden': 1,
+                    'qhelp': "The Git repository for the layer source code",
+                },
+                {   'name': 'Subdirectory',
+                    'clclass': 'git-subdir',
+                    'hidden': 1,
+                    'qhelp': "The layer directory within the Git repository",
+                },
+                {   'name': 'Branch, tag o commit',
+                    'clclass': 'branch',
+                    'qhelp': "The Git branch of the layer. For the layers from the OpenEmbedded source, the branch matches the Yocto Project version you selected for this project",
+                },
+                {   'name': 'Dependencies',
+                    'clclass': 'dependencies',
+                    'qhelp': "Other layers a layer depends upon",
+                },
+                {   'name': 'Add | Delete',
+                    'dclass': 'span2',
+                    'qhelp': "Add or delete layers to / from your project ",
+                },
+
+            ]
+        }
+
+        return render(request, template, context)
+
+    def layerdetails(request, layerid):
+        template = "layerdetails.html"
+        context = {
+            'layerversion': Layer_Version.objects.get(pk = layerid),
+        }
+        return render(request, template, context)
+
+    def targets(request):
+        template = "targets.html"
+        # define here what parameters the view needs in the GET portion in order to
+        # be able to display something.  'count' and 'page' are mandatory for all views
+        # that use paginators.
+        mandatory_parameters = { 'count': 10,  'page' : 1, 'orderby' : 'name:+' };
+        retval = _verify_parameters( request.GET, mandatory_parameters )
+        if retval:
+            return _redirect_parameters( 'targets', request.GET, mandatory_parameters)
+
+        # boilerplate code that takes a request for an object type and returns a queryset
+        # for that object type. copypasta for all needed table searches
+        (filter_string, search_term, ordering_string) = _search_tuple(request, Recipe)
+
+        queryset_all = Recipe.objects.all()
+        if 'project_id' in request.session:
+            queryset_all = queryset_all.filter(Q(layer_version__up_branch__in = Branch.objects.filter(name = Project.objects.get(pk=request.session['project_id']).release.name)) | Q(layer_version__build__in = Project.objects.get(pk = request.session['project_id']).build_set.all()))
+
+        queryset_with_search = _get_queryset(Recipe, queryset_all, None, search_term, ordering_string, '-name')
+        queryset = _get_queryset(Recipe, queryset_all, filter_string, search_term, ordering_string, '-name')
+
+        # retrieve the objects that will be displayed in the table; targets a paginator and gets a page range to display
+        target_info = _build_page_range(Paginator(queryset, request.GET.get('count', 10)),request.GET.get('page', 1))
+
+
+        context = {
+            'objects' : target_info,
+            'objectname' : "targets",
+            'default_orderby' : 'name:+',
+            'total_count': queryset_with_search.count(),
+
+            'tablecols' : [
+                {   'name': 'Target',
+                    'orderfield': _get_toggle_order(request, "name"),
+                    'ordericon' : _get_toggle_order_icon(request, "name"),
+                },
+                {   'name': 'Target version',
+                    'dclass': 'span2',
+                },
+                {   'name': 'Description',
+                    'dclass': 'span5',
+                    'clclass': 'description',
+                },
+                {   'name': 'Recipe file',
+                    'clclass': 'recipe-file',
+                    'hidden': 1,
+                    'dclass': 'span5',
+                },
+                {   'name': 'Section',
+                    'clclass': 'target-section',
+                    'hidden': 1,
+                },
+                {   'name': 'License',
+                    'clclass': 'license',
+                    'hidden': 1,
+                },
+                {   'name': 'Layer',
+                    'clclass': 'layer',
+                },
+                {   'name': 'Layer source',
+                    'clclass': 'source',
+                    'qhelp': "Where the target is coming from, for example, if it's part of the OpenEmbedded collection of targets or if it's a target you have imported",
+                    'orderfield': _get_toggle_order(request, "layer_source__name"),
+                    'ordericon': _get_toggle_order_icon(request, "layer_source__name"),
+                    'filter': {
+                        'class': 'target',
+                        'label': 'Show:',
+                        'options': map(lambda x: (x.name, 'layer_source__pk:' + str(x.id), queryset_with_search.filter(layer_source__pk = x.id).count() ), LayerSource.objects.all()),
+                    }
+                },
+                {   'name': 'Branch, tag or commit',
+                    'clclass': 'branch',
+                    'hidden': 1,
+                },
+                {   'name': 'Build',
+                    'dclass': 'span2',
+                    'qhelp': "Add or delete targets to / from your project ",
+                },
+
+            ]
+        }
+
+        return render(request, template, context)
+
+    def machines(request):
+        template = "machines.html"
+        # define here what parameters the view needs in the GET portion in order to
+        # be able to display something.  'count' and 'page' are mandatory for all views
+        # that use paginators.
+        mandatory_parameters = { 'count': 10,  'page' : 1, 'orderby' : 'name:+' };
+        retval = _verify_parameters( request.GET, mandatory_parameters )
+        if retval:
+            return _redirect_parameters( 'machines', request.GET, mandatory_parameters)
+
+        # boilerplate code that takes a request for an object type and returns a queryset
+        # for that object type. copypasta for all needed table searches
+        (filter_string, search_term, ordering_string) = _search_tuple(request, Machine)
+
+        queryset_all = Machine.objects.all()
+#        if 'project_id' in request.session:
+#            queryset_all = queryset_all.filter(Q(layer_version__up_branch__in = Branch.objects.filter(name = Project.objects.get(request.session['project_id']).release.name)) | Q(layer_version__build__in = Project.objects.get(request.session['project_id']).build_set.all()))
+
+        queryset_with_search = _get_queryset(Machine, queryset_all, None, search_term, ordering_string, '-name')
+        queryset = _get_queryset(Machine, queryset_all, filter_string, search_term, ordering_string, '-name')
+
+        # retrieve the objects that will be displayed in the table; machines a paginator and gets a page range to display
+        machine_info = _build_page_range(Paginator(queryset, request.GET.get('count', 10)),request.GET.get('page', 1))
+
+
+        context = {
+            'objects' : machine_info,
+            'objectname' : "machines",
+            'default_orderby' : 'name:+',
+            'total_count': queryset_with_search.count(),
+
+            'tablecols' : [
+                {   'name': 'Machine',
+                    'orderfield': _get_toggle_order(request, "name"),
+                    'ordericon' : _get_toggle_order_icon(request, "name"),
+                },
+                {   'name': 'Description',
+                    'dclass': 'span5',
+                    'clclass': 'description',
+                },
+                {   'name': 'Machine file',
+                    'clclass': 'machine-file',
+                    'hidden': 1,
+                },
+                {   'name': 'Layer',
+                    'clclass': 'layer',
+                },
+                {   'name': 'Layer source',
+                    'clclass': 'source',
+                    'qhelp': "Where the machine is coming from, for example, if it's part of the OpenEmbedded collection of machines or if it's a machine you have imported",
+                    'orderfield': _get_toggle_order(request, "layer_source__name"),
+                    'ordericon': _get_toggle_order_icon(request, "layer_source__name"),
+                    'filter': {
+                        'class': 'machine',
+                        'label': 'Show:',
+                        'options': map(lambda x: (x.name, 'layer_source__pk:' + str(x.id), queryset_with_search.filter(layer_source__pk = x.id).count() ), LayerSource.objects.all()),
+                    }
+                },
+                {   'name': 'Branch, tag or commit',
+                    'clclass': 'branch',
+                    'hidden': 1,
+                },
+                {   'name': 'Select',
+                    'dclass': 'span2',
+                    'qhelp': "Add or delete machines to / from your project ",
+                },
+
+            ]
+        }
+
+        return render(request, template, context)
+
+    def projectconf(request, pid):
+        template = "projectconf.html"
+        context = {
+            'configvars': ProjectVariable.objects.filter(project_id = pid),
+        }
+        return render(request, template, context)
+
+    def projectbuilds(request, pid):
+        template = 'projectbuilds.html'
+        # define here what parameters the view needs in the GET portion in order to
+        # be able to display something.  'count' and 'page' are mandatory for all views
+        # that use paginators.
+        mandatory_parameters = { 'count': 10,  'page' : 1, 'orderby' : 'completed_on:-' };
+        retval = _verify_parameters( request.GET, mandatory_parameters )
+
+        # boilerplate code that takes a request for an object type and returns a queryset
+        # for that object type. copypasta for all needed table searches
+        (filter_string, search_term, ordering_string) = _search_tuple(request, Build)
+        queryset_all = Build.objects.all.exclude(outcome = Build.IN_PROGRESS)
+        queryset_with_search = _get_queryset(Build, queryset_all, None, search_term, ordering_string, '-completed_on')
+        queryset = _get_queryset(Build, queryset_all, filter_string, search_term, ordering_string, '-completed_on')
+
+        # retrieve the objects that will be displayed in the table; builds a paginator and gets a page range to display
+        build_info = _build_page_range(Paginator(queryset, request.GET.get('count', 10)),request.GET.get('page', 1))
+
+
+        # set up list of fstypes for each build
+        fstypes_map = {};
+        for build in build_info:
+            targets = Target.objects.filter( build_id = build.id )
+            comma = "";
+            extensions = "";
+            for t in targets:
+                if ( not t.is_image ):
+                    continue
+                tif = Target_Image_File.objects.filter( target_id = t.id )
+                for i in tif:
+                    s=re.sub('.*tar.bz2', 'tar.bz2', i.file_name)
+                    if s == i.file_name:
+                        s=re.sub('.*\.', '', i.file_name)
+                    if None == re.search(s,extensions):
+                        extensions += comma + s
+                        comma = ", "
+            fstypes_map[build.id]=extensions
+
+        # send the data to the template
+        context = {
+                    'objects' : build_info,
+                    'objectname' : "builds",
+                    'default_orderby' : 'completed_on:-',
+                    'fstypes' : fstypes_map,
+                    'search_term' : search_term,
+                    'total_count' : queryset_with_search.count(),
+                # Specifies the display of columns for the table, appearance in "Edit columns" box, toggling default show/hide, and specifying filters for columns
+                    'tablecols' : [
+                    {'name': 'Outcome',                                                # column with a single filter
+                     'qhelp' : "The outcome tells you if a build successfully completed or failed",     # the help button content
+                     'dclass' : "span2",                                                # indication about column width; comes from the design
+                     'orderfield': _get_toggle_order(request, "outcome"),               # adds ordering by the field value; default ascending unless clicked from ascending into descending
+                     'ordericon':_get_toggle_order_icon(request, "outcome"),
+                      # filter field will set a filter on that column with the specs in the filter description
+                      # the class field in the filter has no relation with clclass; the control different aspects of the UI
+                      # still, it is recommended for the values to be identical for easy tracking in the generated HTML
+                     'filter' : {'class' : 'outcome',
+                                 'label': 'Show:',
+                                 'options' : [
+                                             ('Successful builds', 'outcome:' + str(Build.SUCCEEDED), queryset_with_search.filter(outcome=str(Build.SUCCEEDED)).count()),  # this is the field search expression
+                                             ('Failed builds', 'outcome:'+ str(Build.FAILED), queryset_with_search.filter(outcome=str(Build.FAILED)).count()),
+                                             ]
+                                }
+                    },
+                    {'name': 'Target',                                                 # default column, disabled box, with just the name in the list
+                     'qhelp': "This is the build target or build targets (i.e. one or more recipes or image recipes)",
+                     'orderfield': _get_toggle_order(request, "target__target"),
+                     'ordericon':_get_toggle_order_icon(request, "target__target"),
+                    },
+                    {'name': 'Machine',
+                     'qhelp': "The machine is the hardware for which you are building a recipe or image recipe",
+                     'orderfield': _get_toggle_order(request, "machine"),
+                     'ordericon':_get_toggle_order_icon(request, "machine"),
+                     'dclass': 'span3'
+                    },                           # a slightly wider column
+                    {'name': 'Started on', 'clclass': 'started_on', 'hidden' : 1,      # this is an unchecked box, which hides the column
+                     'qhelp': "The date and time you started the build",
+                     'orderfield': _get_toggle_order(request, "started_on", True),
+                     'ordericon':_get_toggle_order_icon(request, "started_on"),
+                     'filter' : {'class' : 'started_on',
+                                 'label': 'Show:',
+                                 'options' : [
+                                             ("Today's builds" , 'started_on__gte:'+timezone.now().strftime("%Y-%m-%d"), queryset_with_search.filter(started_on__gte=timezone.now()).count()),
+                                             ("Yesterday's builds", 'started_on__gte:'+(timezone.now()-timedelta(hours=24)).strftime("%Y-%m-%d"), queryset_with_search.filter(started_on__gte=(timezone.now()-timedelta(hours=24))).count()),
+                                             ("This week's builds", 'started_on__gte:'+(timezone.now()-timedelta(days=7)).strftime("%Y-%m-%d"), queryset_with_search.filter(started_on__gte=(timezone.now()-timedelta(days=7))).count()),
+                                             ]
+                                }
+                    },
+                    {'name': 'Completed on',
+                     'qhelp': "The date and time the build finished",
+                     'orderfield': _get_toggle_order(request, "completed_on", True),
+                     'ordericon':_get_toggle_order_icon(request, "completed_on"),
+                     'orderkey' : 'completed_on',
+                     'filter' : {'class' : 'completed_on',
+                                 'label': 'Show:',
+                                 'options' : [
+                                             ("Today's builds", 'completed_on__gte:'+timezone.now().strftime("%Y-%m-%d"), queryset_with_search.filter(completed_on__gte=timezone.now()).count()),
+                                             ("Yesterday's builds", 'completed_on__gte:'+(timezone.now()-timedelta(hours=24)).strftime("%Y-%m-%d"), queryset_with_search.filter(completed_on__gte=(timezone.now()-timedelta(hours=24))).count()),
+                                             ("This week's builds", 'completed_on__gte:'+(timezone.now()-timedelta(days=7)).strftime("%Y-%m-%d"), queryset_with_search.filter(completed_on__gte=(timezone.now()-timedelta(days=7))).count()),
+                                             ]
+                                }
+                    },
+                    {'name': 'Failed tasks', 'clclass': 'failed_tasks',                # specifing a clclass will enable the checkbox
+                     'qhelp': "How many tasks failed during the build",
+                     'filter' : {'class' : 'failed_tasks',
+                                 'label': 'Show:',
+                                 'options' : [
+                                             ('Builds with failed tasks', 'task_build__outcome:4', queryset_with_search.filter(task_build__outcome=4).count()),
+                                             ('Builds without failed tasks', 'task_build__outcome:NOT4', queryset_with_search.filter(~Q(task_build__outcome=4)).count()),
+                                             ]
+                                }
+                    },
+                    {'name': 'Errors', 'clclass': 'errors_no',
+                     'qhelp': "How many errors were encountered during the build (if any)",
+                     'orderfield': _get_toggle_order(request, "errors_no", True),
+                     'ordericon':_get_toggle_order_icon(request, "errors_no"),
+                     'orderkey' : 'errors_no',
+                     'filter' : {'class' : 'errors_no',
+                                 'label': 'Show:',
+                                 'options' : [
+                                             ('Builds with errors', 'errors_no__gte:1', queryset_with_search.filter(errors_no__gte=1).count()),
+                                             ('Builds without errors', 'errors_no:0', queryset_with_search.filter(errors_no=0).count()),
+                                             ]
+                                }
+                    },
+                    {'name': 'Warnings', 'clclass': 'warnings_no',
+                     'qhelp': "How many warnings were encountered during the build (if any)",
+                     'orderfield': _get_toggle_order(request, "warnings_no", True),
+                     'ordericon':_get_toggle_order_icon(request, "warnings_no"),
+                     'orderkey' : 'warnings_no',
+                     'filter' : {'class' : 'warnings_no',
+                                 'label': 'Show:',
+                                 'options' : [
+                                             ('Builds with warnings','warnings_no__gte:1', queryset_with_search.filter(warnings_no__gte=1).count()),
+                                             ('Builds without warnings','warnings_no:0', queryset_with_search.filter(warnings_no=0).count()),
+                                             ]
+                                }
+                    },
+                    {'name': 'Time', 'clclass': 'time', 'hidden' : 1,
+                     'qhelp': "How long it took the build to finish",
+                     'orderfield': _get_toggle_order(request, "timespent", True),
+                     'ordericon':_get_toggle_order_icon(request, "timespent"),
+                     'orderkey' : 'timespent',
+                    },
+                    {'name': 'Log',
+                     'dclass': "span4",
+                     'qhelp': "Path to the build main log file",
+                     'clclass': 'log', 'hidden': 1,
+                     'orderfield': _get_toggle_order(request, "cooker_log_path"),
+                     'ordericon':_get_toggle_order_icon(request, "cooker_log_path"),
+                     'orderkey' : 'cooker_log_path',
+                    },
+                    {'name': 'Output', 'clclass': 'output',
+                     'qhelp': "The root file system types produced by the build. You can find them in your <code>/build/tmp/deploy/images/</code> directory",
+                    },
+                    ]
+                }
+
+        return render(request, template, context)
 else:
     # these are pages that are NOT available in interactive mode
     def managedcontextprocessor(request):
@@ -1940,3 +2390,26 @@ else:
     def xhr_projectedit(request, pid):
         raise Exception("page not available in interactive mode")
 
+    def importlayer(request):
+        raise Exception("page not available in interactive mode")
+
+    def layers(request):
+        raise Exception("page not available in interactive mode")
+
+    def layerdetails(request):
+        raise Exception("page not available in interactive mode")
+
+    def targets(request):
+        raise Exception("page not available in interactive mode")
+
+    def targetdetails(request):
+        raise Exception("page not available in interactive mode")
+
+    def machines(request):
+        raise Exception("page not available in interactive mode")
+
+    def projectconf(request):
+        raise Exception("page not available in interactive mode")
+
+    def projectbuilds(request):
+        raise Exception("page not available in interactive mode")

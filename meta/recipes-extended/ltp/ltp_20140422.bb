@@ -19,13 +19,17 @@ LIC_FILES_CHKSUM = "\
     file://utils/ffsb-6.0-rc2/COPYING;md5=c46082167a314d785d012a244748d803 \
 "
 
-DEPENDS = "attr libaio libcap acl openssl"
+DEPENDS = "attr libaio libcap acl openssl zip-native"
 SRCREV = "f4c3bfe1eab51eb72caeb0f3336d2790c9a8bd1b"
 
 SRC_URI = "git://github.com/linux-test-project/ltp.git \
     file://0001-Rename-runtests_noltp.sh-script-so-have-unique-name.patch \
     file://ltp-Do-not-link-against-libfl.patch \
     file://automake-foreign.patch \
+    file://make-setregid02-work.patch \
+    file://add-knob-for-numa.patch \
+    file://0001-Realtime-tests-Fix-bad-priority-inheritance-conditio.patch \
+    file://0001-Realtime-tests-Fix-robust-mutex-conditionals.patch \
 "
 
 S = "${WORKDIR}/git"
@@ -37,6 +41,8 @@ TARGET_CC_ARCH += "${LDFLAGS}"
 export prefix = "/opt/ltp"
 export exec_prefix = "/opt/ltp"
 
+PACKAGECONFIG[numa] = "--with-numa, --without-numa, numactl,"
+EXTRA_AUTORECONF += "-I ${S}/testcases/realtime/m4"
 EXTRA_OECONF = " --with-power-management-testsuite --with-realtime-testsuite "
 
 # ltp doesn't regenerate ffsb-6.0-rc2 configure and hardcode configure call.

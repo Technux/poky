@@ -27,9 +27,10 @@ PACKAGECONFIG[ipv6] = "--enable-ipv6,--disable-ipv6,"
 PACKAGECONFIG[ssl] = "--with-ssl --with-random=/dev/urandom,--without-ssl,openssl"
 PACKAGECONFIG[gnutls] = "--with-gnutls,--without-gnutls,gnutls"
 PACKAGECONFIG[zlib] = "--with-zlib=${STAGING_LIBDIR}/../,--without-zlib,zlib"
+PACKAGECONFIG[rtmpdump] = "--with-librtmp,--without-librtmp,rtmpdump"
+PACKAGECONFIG[libssh2] = "--with-libssh2,--without-libssh2,libssh2"
 
-EXTRA_OECONF = "--without-libssh2 \
-                --without-libidn \
+EXTRA_OECONF = "--without-libidn \
                 --enable-crypto-auth \
                 --disable-ldap \
                 --disable-ldaps \

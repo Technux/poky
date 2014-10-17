@@ -22,7 +22,7 @@
        <link linkend='var-D'>D</link>
        <link linkend='var-ENABLE_BINARY_LOCALE_GENERATION'>E</link>
        <link linkend='var-FEATURE_PACKAGES'>F</link>
-       <link linkend='var-GROUPADD_PARAM'>G</link>
+       <link linkend='var-GLIBC_GENERATE_LOCALES'>G</link>
        <link linkend='var-HOMEPAGE'>H</link>
        <link linkend='var-ICECC_DISABLED'>I</link>
 <!--               <link linkend='var-glossary-j'>J</link> -->
@@ -2879,6 +2879,28 @@
 
     <glossdiv id='var-glossary-g'><title>G</title>
 
+        <glossentry id='var-GLIBC_GENERATE_LOCALES'><glossterm>GLIBC_GENERATE_LOCALES</glossterm>
+            <glossdef>
+                <para>
+                    Specifies the list of GLIBC locales to generate should you
+                    not wish generate all LIBC locals, which can be time
+                    consuming.
+                    <note>
+                        If you specifically remove the locale
+                        <filename>en_US.UTF-8</filename>, you must set
+                        <link linkend='var-IMAGE_LINGUAS'><filename>IMAGE_LINGUAS</filename></link>
+                        appropriately.
+                    </note>
+                    You can set <filename>GLIBC_GENERATE_LOCALES</filename>
+                    in your <filename>local.conf</filename> file.
+                    By default, all locales are generated.
+                    <literallayout class='monospaced'>
+      GLIBC_GENERATE_LOCALES = "en_GB.UTF-8 en_US.UTF-8"
+                    </literallayout>
+                </para>
+            </glossdef>
+        </glossentry>
+
         <glossentry id='var-GROUPADD_PARAM'><glossterm>GROUPADD_PARAM</glossterm>
             <glossdef>
                 <para>
@@ -3235,6 +3257,26 @@
             </glossdef>
         </glossentry>
 
+        <glossentry id='var-IMAGE_BOOT_FILES'><glossterm>IMAGE_BOOT_FILES</glossterm>
+            <glossdef>
+                <para>
+                    A space-separated list of files installed into the
+                    boot partition when preparing an image.
+                    By default, the files are installed under the same name as
+                    the source files.
+                    To change the installed name, separate it from the
+                    original name with a semi-colon (;).
+                    Source files need to be located in
+                    <link linkend='var-DEPLOY_DIR_IMAGE'><filename>DEPLOY_DIR_IMAGE</filename></link>.
+                    Here are two examples:
+
+                    <literallayout class="monospaced">
+     IMAGE_BOOT_FILES = "u-boot.img uImage;kernel"
+     IMAGE_BOOT_FILES = "u-boot.${UBOOT_SUFFIX} ${KERNEL_IMAGETYPE}"
+                    </literallayout></para>
+            </glossdef>
+        </glossentry>
+
         <glossentry id='var-IMAGE_CLASSES'><glossterm>IMAGE_CLASSES</glossterm>
             <glossdef>
                 <para>
@@ -3459,6 +3501,12 @@
                     and <filename>*-locale-de</filename>, since some software
                     packages only provide locale files by language and not by
                     country-specific language).
+                </para>
+
+                <para>
+                    See the
+                    <link linkend='var-GLIBC_GENERATE_LOCALES'><filename>GLIBC_GENERATE_LOCALES</filename></link>
+                    variable for information on generating GLIBC locales.
                 </para>
             </glossdef>
         </glossentry>
@@ -3874,6 +3922,34 @@ recipes-graphics/xorg-font/font-alias_1.0.3.bb:PR = "${INC_PR}.3"
                 <para>
                     Set the variable to "1" to prevent the default dependencies
                     from being added.
+                </para>
+            </glossdef>
+        </glossentry>
+
+        <glossentry id='var-INHIBIT_PACKAGE_DEBUG_SPLIT'><glossterm>INHIBIT_PACKAGE_DEBUG_SPLIT</glossterm>
+            <glossdef>
+
+                <para>
+                    Prevents the OpenEmbedded build system from splitting
+                    out debug information during packaging.
+                    By default, the build system splits out debugging
+                    information during the
+                    <link linkend='ref-tasks-package'><filename>do_package</filename></link>
+                    task.
+                    For more information on how debug information is split out,
+                    see the
+                    <link linkend='var-PACKAGE_DEBUG_SPLIT_STYLE'><filename>PACKAGE_DEBUG_SPLIT_STYLE</filename></link>
+                    variable.
+                </para>
+
+                <para>
+                    To prevent the build system from splitting out
+                    debug information during packaging, set the
+                    <filename>INHIBIT_PACKAGE_DEBUG_SPLIT</filename> variable
+                    as follows:
+                    <literallayout class='monospaced'>
+     INHIBIT_PACKAGE_DEBUG_SPLIT = "1"
+                    </literallayout>
                 </para>
             </glossdef>
         </glossentry>
@@ -5722,6 +5798,62 @@ recipes-graphics/xorg-font/font-alias_1.0.3.bb:PR = "${INC_PR}.3"
             </glossdef>
         </glossentry>
 
+        <glossentry id='var-PACKAGE_DEBUG_SPLIT_STYLE'><glossterm>PACKAGE_DEBUG_SPLIT_STYLE</glossterm>
+            <glossdef>
+
+                <para>
+                    Determines how to split up the binary and debug information
+                    when creating <filename>*-dbg</filename> packages to be
+                    used with the GNU Project Debugger (GDB).
+                </para>
+
+                <para>
+                    With the
+                    <filename>PACKAGE_DEBUG_SPLIT_STYLE</filename> variable,
+                    you can control where debug information, which can include
+                    or exclude source files, is stored:
+                    <itemizedlist>
+                        <listitem><para>
+                            ".debug": Debug symbol files are placed next
+                            to the binary in a <filename>.debug</filename>
+                            directory on the target.
+                            For example, if a binary is installed into
+                            <filename>/bin</filename>, the corresponding debug
+                            symbol files are installed in
+                            <filename>/bin/.debug</filename>.
+                            Source files are placed in
+                            <filename>/usr/src/debug</filename>.
+                            This is the default behavior.
+                            </para></listitem>
+                        <listitem><para>
+                            "debug-file-directory": Debug symbol files are
+                            placed under <filename>/usr/lib/debug</filename>
+                            on the target, and separated by the path from where
+                            the binary is installed.
+                            For example, if a binary is installed in
+                            <filename>/bin</filename>, the corresponding debug
+                            symbols are installed in
+                            <filename>/usr/lib/debug/bin</filename>.
+                            Source files are placed in
+                            <filename>/usr/src/debug</filename>.
+                            </para></listitem>
+                        <listitem><para>
+                            "debug-without-src": The same behavior as
+                            ".debug" previously described with the exception
+                            that no source files are installed.
+                            </para></listitem>.
+                    </itemizedlist>
+                </para>
+
+                <para>
+                    You can find out more about debugging using GDB by reading
+                    the
+                    "<ulink url='&YOCTO_DOCS_DEV_URL;#platdev-gdb-remotedebug'>Debugging With the GNU Project Debugger (GDB) Remotely</ulink>"
+                    section in the Yocto Project Development Manual.
+                </para>
+            </glossdef>
+        </glossentry>
+
         <glossentry id='var-PACKAGE_EXCLUDE'><glossterm>PACKAGE_EXCLUDE</glossterm>
             <glossdef>
                 <para>
@@ -6998,31 +7130,40 @@ recipes-graphics/xorg-font/font-alias_1.0.3.bb:PR = "${INC_PR}.3"
                     A list of packages that extends the usability of a package
                     being built.
                     The package being built does not depend on this list of
-                    packages in order to successfully build, but needs them for
-                    the extended usability.
+                    packages in order to successfully build, but rather
+                    uses them for extended usability.
                     To specify runtime dependencies for packages, see the
                     <filename><link linkend='var-RDEPENDS'>RDEPENDS</link></filename>
                     variable.
                 </para>
 
                 <para>
-                    The OpenEmbedded build process automatically installs the
-                    list of packages as part of the built package.
-                    However, you can remove these packages later if you want.
-                    If, during the build, a package from the
-                    <filename>RRECOMMENDS</filename> list cannot be
-                    found, the build process continues without an error.
-                </para>
-
-                <para>
-                    You can also prevent packages in the list from being
-                    installed by using several variables.
-                    See the
+                    The package manager will automatically install the
+                    <filename>RRECOMMENDS</filename> list of packages when
+                    installing the built package.
+                    However, you can prevent listed packages from being
+                    installed by using the
                     <link linkend='var-BAD_RECOMMENDATIONS'><filename>BAD_RECOMMENDATIONS</filename></link>,
                     <link linkend='var-NO_RECOMMENDATIONS'><filename>NO_RECOMMENDATIONS</filename></link>,
                     and
                     <link linkend='var-PACKAGE_EXCLUDE'><filename>PACKAGE_EXCLUDE</filename></link>
-                    variables for more information.
+                    variables.
+                </para>
+
+                <para>
+                    Packages specified in
+                    <filename>RRECOMMENDS</filename> need not actually be
+                    produced.
+                    However, a recipe must exist that provides each package,
+                    either through the
+                    <link linkend='var-PACKAGES'><filename>PACKAGES</filename></link>
+                    or
+                    <link linkend='var-PACKAGES_DYNAMIC'><filename>PACKAGES_DYNAMIC</filename></link>
+                    variables or the
+                    <link linkend='var-RPROVIDES'><filename>RPROVIDES</filename></link>
+                    variable, or an error will occur during the build.
+                    If such a recipe does exist and the package is not produced,
+                    the build continues without error.
                 </para>
 
                 <para>

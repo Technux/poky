@@ -41,19 +41,14 @@ RDEPENDS_packagegroup-self-hosted-host-tools = "\
     hdparm \
     iptables \
     lsb \
-    xdg-utils \
     mc \
     mc-fish \
     mc-helpers \
     mc-helpers-perl \
     mc-helpers-python \
-    leafpad \
-    ${MIDORI} \
-    pcmanfm \
     parted \
     pseudo \
     screen \
-    vte \
     "
 
 RRECOMMENDS_packagegroup-self-hosted-host-tools = "\
@@ -64,7 +59,7 @@ RRECOMMENDS_packagegroup-self-hosted-host-tools = "\
     kernel-module-iptable-filter \
 	"
 
-# eglibc-utils: for rpcgen
+# glibc-utils: for rpcgen
 RDEPENDS_packagegroup-self-hosted-sdk = "\
     autoconf \
     automake \
@@ -75,8 +70,8 @@ RDEPENDS_packagegroup-self-hosted-sdk = "\
     cpp \
     cpp-symlinks \
     distcc \
-    eglibc-utils \
-    eglibc-gconv-ibm850 \
+    glibc-utils \
+    glibc-gconv-ibm850 \
     file \
     findutils \
     g++ \
@@ -224,6 +219,11 @@ RDEPENDS_packagegroup-self-hosted-graphics = "\
     libx11-dev \
     python-pygtk \
     gtk-theme-clearlooks \
+    xdg-utils \
+    ${MIDORI} \
+    leafpad \
+    pcmanfm \
+    vte \
     "
 PTH = "pth"
 PTH_libc-uclibc = ""

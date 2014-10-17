@@ -1241,10 +1241,6 @@ python emit_pkgdata() {
         sf.write('%s_%s: %d\n' % ('PKGSIZE', pkg, total_size))
         sf.close()
 
-        # Symlinks needed for reverse lookups (from the final package name)
-        subdata_sym = pkgdatadir + "/runtime-reverse/%s" % pkgval
-        oe.path.symlink("../runtime/%s" % pkg, subdata_sym, True)
-        
         # Symlinks needed for rprovides lookup
         if rprov:
             for p in rprov.strip().split():
@@ -1259,6 +1255,10 @@ python emit_pkgdata() {
         os.chdir(root)
         g = glob('*')
         if g or allow_empty == "1":
+            # Symlinks needed for reverse lookups (from the final package name)
+            subdata_sym = pkgdatadir + "/runtime-reverse/%s" % pkgval
+            oe.path.symlink("../runtime/%s" % pkg, subdata_sym, True)
+
             packagedfile = pkgdatadir + '/runtime/%s.packaged' % pkg
             open(packagedfile, 'w').close()
 
@@ -1572,8 +1572,11 @@ python package_do_shlibs() {
                 bb.debug(2, '%s: Dependency %s covered by PRIVATE_LIBS' % (pkg, n[0]))
                 continue
             if n[0] in shlib_provider.keys():
+                shlib_provider_path = list()
+                for k in shlib_provider[n[0]].keys():
+                    shlib_provider_path.append(k)
                 match = None
-                for p in n[2] + libsearchpath:
+                for p in n[2] + shlib_provider_path + libsearchpath:
                     if p in shlib_provider[n[0]]:
                         match = p
                         break
@@ -1930,9 +1933,9 @@ python do_package () {
     # Optimisations
     ###########################################################################
 
-    # Contunually rexpanding complex expressions is inefficient, particularly when
-    # we write to the datastore and invalidate the expansion cache. This code 
-    # pre-expands some frequently used variables
+    # Continually expanding complex expressions is inefficient, particularly
+    # when we write to the datastore and invalidate the expansion cache. This
+    # code pre-expands some frequently used variables
 
     def expandVar(x, d):
         d.setVar(x, d.getVar(x, True))

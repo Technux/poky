@@ -20,6 +20,7 @@ BUILDPERF_libc-uclibc = "no"
 # to cover a wide range of kernel we add both dependencies
 TUI_DEPENDS = "${@perf_feature_enabled('perf-tui', 'libnewt slang', '',d)}"
 SCRIPTING_DEPENDS = "${@perf_feature_enabled('perf-scripting', 'perl python', '',d)}"
+LIBUNWIND_DEPENDS = "${@perf_feature_enabled('perf-libunwind', 'libunwind', '',d)}"
 
 DEPENDS = "virtual/kernel \
     virtual/${MLPREFIX}libc \
@@ -27,6 +28,7 @@ DEPENDS = "virtual/kernel \
     ${MLPREFIX}binutils \
     ${TUI_DEPENDS} \
     ${SCRIPTING_DEPENDS} \
+    ${LIBUNWIND_DEPENDS} \
     bison flex \
 "
 
@@ -62,6 +64,7 @@ B = "${WORKDIR}/${BPN}-${PV}"
 
 SCRIPTING_DEFINES = "${@perf_feature_enabled('perf-scripting', '', 'NO_LIBPERL=1 NO_LIBPYTHON=1',d)}"
 TUI_DEFINES = "${@perf_feature_enabled('perf-tui', '', 'NO_NEWT=1',d)}"
+LIBUNWIND_DEFINES = "${@perf_feature_enabled('perf-libunwind', '', 'NO_LIBUNWIND=1',d)}"
 
 # The LDFLAGS is required or some old kernels fails due missing
 # symbols and this is preferred than requiring patches to every old
@@ -75,8 +78,9 @@ EXTRA_OEMAKE = '\
     ARCH=${ARCH} \
     CC="${CC}" \
     AR="${AR}" \
+    EXTRA_CFLAGS="-ldw" \
     perfexecdir=${libexecdir} \
-    NO_GTK2=1 ${TUI_DEFINES} NO_DWARF=1 NO_LIBUNWIND=1 ${SCRIPTING_DEFINES} \
+    NO_GTK2=1 ${TUI_DEFINES} NO_DWARF=1 ${LIBUNWIND_DEFINES} ${SCRIPTING_DEFINES} \
 '
 
 EXTRA_OEMAKE += "\
@@ -121,10 +125,13 @@ do_configure_prepend () {
     # detected by perf, since it triggers via: ifeq ($(ARCH),x86_64). In a 32 bit
     # build, with a 64 bit multilib, the arch won't match and the detection of a 
     # 64 bit build (and library) are not exected. To ensure that libraries are
-    # installed to the correct location, we can make the substitution in the 
-    # config/Makefile. For non multilib builds, this has no impact.
+    # installed to the correct location, we can use the weak assignment in the
+    # config/Makefile.
     if [ -e "${S}/tools/perf/config/Makefile" ]; then
-        sed -i 's,libdir = $(prefix)/$(lib),libdir = $(prefix)/${baselib},' ${S}/tools/perf/config/Makefile
+        # Match $(prefix)/$(lib) and $(prefix)/lib
+        sed -i -e 's,^libdir = \($(prefix)/.*lib\),libdir ?= \1,' \
+               -e 's,^perfexecdir = \(.*\),perfexecdir ?= \1,' \
+            ${S}/tools/perf/config/Makefile
     fi
     # We need to ensure the --sysroot option in CC is preserved
     if [ -e "${S}/tools/perf/Makefile.perf" ]; then
@@ -137,6 +144,15 @@ do_configure_prepend () {
     fi
     if [ -e "${S}/tools/perf/config/feature-checks/Makefile" ]; then
         sed -i 's,CC := $(CROSS_COMPILE)gcc -MD,CC += -MD,' ${S}/tools/perf/config/feature-checks/Makefile
+    fi
+
+    # 3.17-rc1+ has a include issue for arm/powerpc. Temporarily sed in the appropriate include
+    if [ -e "${S}/tools/perf/arch/$ARCH/util/skip-callchain-idx.c" ]; then
+        sed -i 's,#include "util/callchain.h",#include "util/callchain.h"\n#include "util/debug.h",' ${S}/tools/perf/arch/$ARCH/util/skip-callchain-idx.c
+    fi
+    if [ -e "${S}/tools/perf/arch/arm/util/unwind-libunwind.c" ] && [ -e "${S}/tools/perf/arch/arm/tests/dwarf-unwind.c" ]; then
+        sed -i 's,#include "tests/tests.h",#include "tests/tests.h"\n#include "util/debug.h",' ${S}/tools/perf/arch/arm/tests/dwarf-unwind.c
+        sed -i 's,#include "perf_regs.h",#include "perf_regs.h"\n#include "util/debug.h",' ${S}/tools/perf/arch/arm/util/unwind-libunwind.c
     fi
 }
 
@@ -153,6 +169,7 @@ RDEPENDS_${PN} += "elfutils"
 RDEPENDS_${PN}-archive =+ "bash"
 RDEPENDS_${PN}-python =+ "bash python"
 RDEPENDS_${PN}-perl =+ "bash perl perl-modules"
+RDEPENDS_${PN}-tests =+ "python"
 
 RSUGGESTS_SCRIPTING = "${@perf_feature_enabled('perf-scripting', '${PN}-perl ${PN}-python', '',d)}"
 RSUGGESTS_${PN} += "${PN}-archive ${PN}-tests ${RSUGGESTS_SCRIPTING}"

@@ -26,7 +26,7 @@ def get_gcc_mips_plt_setting(bb, d):
     return ""
 
 def get_long_double_setting(bb, d):
-    if d.getVar('TRANSLATED_TARGET_ARCH', True) in [ 'powerpc', 'powerpc64' ] and d.getVar('TCLIBC', True) in [ 'uclibc', 'eglibc' ]:
+    if d.getVar('TRANSLATED_TARGET_ARCH', True) in [ 'powerpc', 'powerpc64' ] and d.getVar('TCLIBC', True) in [ 'uclibc', 'glibc' ]:
         return "--with-long-double-128"
     return ""
 
@@ -79,6 +79,16 @@ ${GNU_MIRROR}/gcc	http://mirrors.rcn.net/pub/sourceware/gcc/releases/ \n \
 ${GNU_MIRROR}/gcc   http://gcc.get-software.com/releases/ \n \
 ${GNU_MIRROR}/gcc	http://gcc.get-software.com/releases/ \n \
 "
+
+python do_preconfigure () {
+    import subprocess
+    cmd = d.expand('PATH=${PATH} cd ${S} && gnu-configize')
+    subprocess.check_output(cmd, stderr=subprocess.STDOUT, shell=True)
+    # See 0044-gengtypes.patch, we need to regenerate this file
+    bb.utils.remove(d.expand("${S}/gcc/gengtype-lex.c"))
+}
+addtask do_preconfigure after do_patch before do_configure
+do_preconfigure[depends] += "gnu-config-native:do_populate_sysroot autoconf-native:do_populate_sysroot"
 
 #
 # Set some default values
