@@ -40,6 +40,50 @@ class BuildEnvironment(models.Model):
     updated     = models.DateTimeField(auto_now = True)
 
 
+    def get_artifact_type(self, path):
+        if self.betype == BuildEnvironment.TYPE_LOCAL:
+            try:
+                import magic
+
+                # fair warning: this is a mess; there are multiple competeing and incompatible
+                # magic modules floating around, so we try some of the most common combinations
+
+                try:    # we try ubuntu's python-magic 5.4
+                    m = magic.open(magic.MAGIC_MIME_TYPE)
+                    m.load()
+                    return m.file(path)
+                except AttributeError:
+                    pass
+
+                try:    # we try python-magic 0.4.6
+                    m = magic.Magic(magic.MAGIC_MIME)
+                    return m.from_file(path)
+                except AttributeError:
+                    pass
+
+                try:    # we try pip filemagic 1.6
+                    m = magic.Magic(flags=magic.MAGIC_MIME_TYPE)
+                    return m.id_filename(path)
+                except AttributeError:
+                    pass
+
+                return "binary/octet-stream"
+            except ImportError:
+                return "binary/octet-stream"
+        raise Exception("FIXME: artifact type not implemented for build environment type %s" % be.get_betype_display())
+
+
+    def get_artifact(self, path):
+        if self.betype == BuildEnvironment.TYPE_LOCAL:
+            return open(path, "r")
+        raise Exception("FIXME: artifact download not implemented for build environment type %s" % be.get_betype_display())
+
+    def has_artifact(self, path):
+        import os
+        if self.betype == BuildRequest.TYPE_LOCAL:
+            return os.path.exists(path)
+        raise Exception("FIXME: has artifact not implemented for build environment type %s" % be.get_betype_display())
+
 # a BuildRequest is a request that the scheduler will build using a BuildEnvironment
 # the build request queue is the table itself, ordered by state
 
@@ -49,6 +93,7 @@ class BuildRequest(models.Model):
     REQ_INPROGRESS = 2
     REQ_COMPLETED = 3
     REQ_FAILED = 4
+    REQ_DELETED = 5
 
     REQUEST_STATE = (
         (REQ_CREATED, "created"),
@@ -56,10 +101,12 @@ class BuildRequest(models.Model):
         (REQ_INPROGRESS, "in progress"),
         (REQ_COMPLETED, "completed"),
         (REQ_FAILED, "failed"),
+        (REQ_DELETED, "deleted"),
     )
 
     project     = models.ForeignKey(Project)
-    build       = models.ForeignKey(Build, null = True)     # TODO: toasterui should set this when Build is created
+    build       = models.OneToOneField(Build, null = True)     # TODO: toasterui should set this when Build is created
+    environment = models.ForeignKey(BuildEnvironment, null = True)
     state       = models.IntegerField(choices = REQUEST_STATE, default = REQ_CREATED)
     created     = models.DateTimeField(auto_now_add = True)
     updated     = models.DateTimeField(auto_now = True)

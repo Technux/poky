@@ -20,6 +20,7 @@ SRC_URI = "http://www.busybox.net/downloads/busybox-${PV}.tar.bz2;name=tarball \
            file://busybox-syslog.default \
            file://mdev \
            file://mdev.conf \
+           file://mdev-mount.sh \
            file://umount.busybox \
            file://defconfig \
            file://busybox-syslog.service.in \
@@ -31,10 +32,7 @@ SRC_URI = "http://www.busybox.net/downloads/busybox-${PV}.tar.bz2;name=tarball \
            file://login-utilities.cfg \
            file://0001-build-system-Specify-nostldlib-when-linking-to-.o-fi.patch \
            file://recognize_connmand.patch \
-"
-
-SRC_URI_append_mips = " \
-    ${@base_conditional( "DEBUG_BUILD", "1", "file://fix-ice-on-mips-while-compiling-with-g-O.patch", "", d )} \
+           file://busybox-cross-menuconfig.patch \
 "
 
 SRC_URI[tarball.md5sum] = "337d1a15ab1cb1d4ed423168b1eb7d7e"

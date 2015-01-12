@@ -153,20 +153,25 @@ class BBCooker:
         self.parser = None
 
         signal.signal(signal.SIGTERM, self.sigterm_exception)
+        # Let SIGHUP exit as SIGTERM
+        signal.signal(signal.SIGHUP, self.sigterm_exception)
 
     def sigterm_exception(self, signum, stackframe):
-        bb.warn("Cooker recieved SIGTERM, shutting down...")
+        if signum == signal.SIGTERM:
+            bb.warn("Cooker recieved SIGTERM, shutting down...")
+        elif signum == signal.SIGHUP:
+            bb.warn("Cooker recieved SIGHUP, shutting down...")
         self.state = state.forceshutdown
 
     def setFeatures(self, features):
         # we only accept a new feature set if we're in state initial, so we can reset without problems
-        if self.state != state.initial:
+        if self.state != state.initial and self.state != state.error:
             raise Exception("Illegal state for feature set change")
         original_featureset = list(self.featureset)
         for feature in features:
             self.featureset.setFeature(feature)
         bb.debug(1, "Features set %s (was %s)" % (original_featureset, list(self.featureset)))
-        if (original_featureset != list(self.featureset)):
+        if (original_featureset != list(self.featureset)) and self.state != state.error:
             self.reset()
 
     def initConfigurationData(self):
@@ -199,6 +204,75 @@ class BBCooker:
         self.databuilder.parseBaseConfiguration()
         self.data = self.databuilder.data
         self.data_hash = self.databuilder.data_hash
+
+
+        # we log all events to a file if so directed
+        if self.configuration.writeeventlog:
+            import json, pickle
+            DEFAULT_EVENTFILE = self.configuration.writeeventlog
+            class EventLogWriteHandler():
+
+                class EventWriter():
+                    def __init__(self, cooker):
+                        self.file_inited = None
+                        self.cooker = cooker
+                        self.event_queue = []
+
+                    def init_file(self):
+                        try:
+                            # delete the old log
+                            os.remove(DEFAULT_EVENTFILE)
+                        except:
+                            pass
+
+                        # write current configuration data
+                        with open(DEFAULT_EVENTFILE, "w") as f:
+                            f.write("%s\n" % json.dumps({ "allvariables" : self.cooker.getAllKeysWithFlags(["doc", "func"])}))
+
+                    def write_event(self, event):
+                        with open(DEFAULT_EVENTFILE, "a") as f:
+                            try:
+                                f.write("%s\n" % json.dumps({"class":event.__module__ + "." + event.__class__.__name__, "vars":json.dumps(pickle.dumps(event)) }))
+                            except Exception as e:
+                                import traceback
+                                print(e, traceback.format_exc(e))
+
+
+                    def send(self, event):
+                        event_class = event.__module__ + "." + event.__class__.__name__
+
+                        # init on bb.event.BuildStarted
+                        if self.file_inited is None:
+                            if  event_class == "bb.event.BuildStarted":
+                                self.init_file()
+                                self.file_inited = True
+
+                                # write pending events
+                                for e in self.event_queue:
+                                    self.write_event(e)
+
+                                # also write the current event
+                                self.write_event(event)
+
+                            else:
+                                # queue all events until the file is inited
+                                self.event_queue.append(event)
+
+                        else:
+                            # we have the file, just write the event
+                            self.write_event(event)
+
+                # set our handler's event processor
+                event = EventWriter(self)       # self is the cooker here
+
+
+            # set up cooker features for this mock UI handler
+
+            # we need to write the dependency tree in the log
+            self.featureset.setFeature(CookerFeatures.SEND_DEPENDS_TREE)
+            # register the log file writer as UI Handler
+            bb.event.register_UIHhandler(EventLogWriteHandler())
+
 
         #
         # Special updated configuration we use for firing events
@@ -240,7 +314,7 @@ class BBCooker:
             f.write(total)
 
         #add to history
-        loginfo = {"op":append, "file":default_file, "line":total.count("\n")}
+        loginfo = {"op":"append", "file":default_file, "line":total.count("\n")}
         self.data.appendVar(var, val, **loginfo)
 
     def saveConfigurationVar(self, var, val, default_file, op):
@@ -309,7 +383,7 @@ class BBCooker:
                 f.write(total)
 
             #add to history
-            loginfo = {"op":set, "file":default_file, "line":total.count("\n")}
+            loginfo = {"op":"set", "file":default_file, "line":total.count("\n")}
             self.data.setVar(var, val, **loginfo)
 
     def removeConfigurationVar(self, var):
@@ -500,7 +574,7 @@ class BBCooker:
         taskdata, runlist, pkgs_to_build = self.buildTaskData(pkgs_to_build, task, False)
 
         return runlist, taskdata
-    
+
     ######## WARNING : this function requires cache_extra to be enabled ########
 
     def generateTaskDepTreeData(self, pkgs_to_build, task):
@@ -1281,7 +1355,7 @@ class BBCooker:
         if self.state == state.running:
             return
 
-        if self.state in (state.shutdown, state.forceshutdown):
+        if self.state in (state.shutdown, state.forceshutdown, state.error):
             if hasattr(self.parser, 'shutdown'):
                 self.parser.shutdown(clean=False, force = True)
             raise bb.BBHandledException()
@@ -1311,7 +1385,7 @@ class BBCooker:
                 raise bb.BBHandledException()
             self.show_appends_with_no_recipes()
             self.handlePrefProviders()
-            self.recipecache.bbfile_priority = self.collection.collection_priorities(self.recipecache.pkg_fn)
+            self.recipecache.bbfile_priority = self.collection.collection_priorities(self.recipecache.pkg_fn, self.data)
             self.state = state.running
             return None
 
@@ -1536,7 +1610,7 @@ class CookerCollectFiles(object):
                     filelist.append(filename)
         return filelist
 
-    def collection_priorities(self, pkgfns):
+    def collection_priorities(self, pkgfns, d):
 
         priorities = {}
 
@@ -1545,10 +1619,10 @@ class CookerCollectFiles(object):
         for p in pkgfns:
             realfn, cls = bb.cache.Cache.virtualfn2realfn(p)
             priorities[p] = self.calc_bbfile_priority(realfn, matched)
- 
+
         # Don't show the warning if the BBFILE_PATTERN did match .bbappend files
         unmatched = set()
-        for _, _, regex, pri in self.bbfile_config_priorities:        
+        for _, _, regex, pri in self.bbfile_config_priorities:
             if not regex in matched:
                 unmatched.add(regex)
 
@@ -1565,7 +1639,8 @@ class CookerCollectFiles(object):
 
         for collection, pattern, regex, _ in self.bbfile_config_priorities:
             if regex in unmatched:
-                collectlog.warn("No bb files matched BBFILE_PATTERN_%s '%s'" % (collection, pattern))
+                if d.getVar('BBFILE_PATTERN_IGNORE_EMPTY_%s' % collection, True) != '1':
+                    collectlog.warn("No bb files matched BBFILE_PATTERN_%s '%s'" % (collection, pattern))
 
         return priorities
 

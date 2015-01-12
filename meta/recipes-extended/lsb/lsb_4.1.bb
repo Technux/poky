@@ -5,7 +5,7 @@ LICENSE = "GPLv2+"
 PR = "r2"
 
 # lsb_release needs getopt
-RDEPENDS_${PN} += "util-linux"
+RDEPENDS_${PN} += "${VIRTUAL-RUNTIME_getopt}"
 
 LIC_FILES_CHKSUM = "file://README;md5=12da544b1a3a5a1795a21160b49471cf"
 
@@ -20,6 +20,8 @@ SRC_URI = "${SOURCEFORGE_MIRROR}/project/lsb/lsb_release/1.4/lsb-release-1.4.tar
 SRC_URI[md5sum] = "30537ef5a01e0ca94b7b8eb6a36bb1e4"
 SRC_URI[sha256sum] = "99321288f8d62e7a1d485b7c6bdccf06766fb8ca603c6195806e4457fdf17172"
 S = "${WORKDIR}/lsb-release-1.4"
+
+CLEANBROKEN = "1"
 
 do_install(){
 	oe_runmake install prefix=${D}  mandir=${D}/${datadir}/man/ DESTDIR=${D}
@@ -119,3 +121,11 @@ FILES_${PN} += "/lib64 \
                 ${base_libdir}/lsb/* \
 		${libdir}/sendmail \
                "
+
+# The sysroot/${libdir}/sendmail conflicts with esmtp's, and it's a
+# symlink to ${sbindir}/sendmail which is meaningless for sysroot, so
+# remove it.
+SYSROOT_PREPROCESS_FUNCS += "remove_sysroot_sendmail"
+remove_sysroot_sendmail() {
+    rm -r "${SYSROOT_DESTDIR}${libdir}/sendmail"
+}

@@ -76,11 +76,19 @@ class PRServer(SimpleXMLRPCServer):
         In addition, exception handling is done here.
 
         """
+        iter_count = 1
+        # With 60 iterations between syncs and a 0.5 second timeout between
+        # iterations, this will sync if dirty every ~30 seconds.
+        iterations_between_sync = 60
+
         while True:
             (request, client_address) = self.requestqueue.get()
             try:
                 self.finish_request(request, client_address)
                 self.shutdown_request(request)
+                iter_count = (iter_count + 1) % iterations_between_sync
+                if iter_count == 0:
+                    self.table.sync_if_dirty()
             except:
                 self.handle_error(request, client_address)
                 self.shutdown_request(request)

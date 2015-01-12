@@ -21,6 +21,8 @@ from django.views.generic import RedirectView
 
 urlpatterns = patterns('toastergui.views',
         # landing page
+        url(r'^landing/$', 'landing', name='landing'),
+
         url(r'^builds/$', 'builds', name='all-builds'),
         # build info navigation
         url(r'^build/(?P<build_id>\d+)$', 'builddashboard', name="builddashboard"),
@@ -57,10 +59,13 @@ urlpatterns = patterns('toastergui.views',
         url(r'^build/(?P<build_id>\d+)/cpuusage$', 'cpuusage', name='cpuusage'),
         url(r'^build/(?P<build_id>\d+)/diskio$', 'diskio', name='diskio'),
 
-        # image information dir - not yet implemented
+        # image information dir
         url(r'^build/(?P<build_id>\d+)/target/(?P<target_id>\d+)/packagefile/(?P<packagefile_id>\d+)$',
              'image_information_dir', name='image_information_dir'),
 
+
+        # build download artifact
+        url(r'^build/(?P<build_id>\d+)/artifact/(?P<artifact_type>\w+)/id/(?P<artifact_id>\w+)', 'build_artifact', name="build_artifact"),
 
         # urls not linked from the dashboard
         url(r'^layerversions/(?P<layerversion_id>\d+)/recipes/.*$', 'layer_versions_recipes', name='layer_versions_recipes'),
@@ -71,17 +76,26 @@ urlpatterns = patterns('toastergui.views',
 
         url(r'^layers/$', 'layers', name='layers'),
         url(r'^layer/(?P<layerid>\d+)/$', 'layerdetails', name='layerdetails'),
+        url(r'^layer/$', 'layerdetails', name='layerdetails'),
         url(r'^targets/$', 'targets', name='targets'),
         url(r'^machines/$', 'machines', name='machines'),
 
+        url(r'^projects/$', 'projects', name='all-projects'),
+
+        url(r'^project/$', 'project', name='project'),
         url(r'^project/(?P<pid>\d+)/$', 'project', name='project'),
         url(r'^project/(?P<pid>\d+)/configuration$', 'projectconf', name='projectconf'),
         url(r'^project/(?P<pid>\d+)/builds$', 'projectbuilds', name='projectbuilds'),
 
+        url(r'^xhr_build/$', 'xhr_build', name='xhr_build'),
         url(r'^xhr_projectbuild/(?P<pid>\d+)/$', 'xhr_projectbuild', name='xhr_projectbuild'),
+        url(r'^xhr_projectinfo/$', 'xhr_projectinfo', name='xhr_projectinfo'),
         url(r'^xhr_projectedit/(?P<pid>\d+)/$', 'xhr_projectedit', name='xhr_projectedit'),
+
+        url(r'^xhr_datatypeahead/$', 'xhr_datatypeahead', name='xhr_datatypeahead'),
+        url(r'^xhr_importlayer/$', 'xhr_importlayer', name='xhr_importlayer'),
 
 
         # default redirection
-        url(r'^$', RedirectView.as_view( url= 'builds/')),
+        url(r'^$', RedirectView.as_view( url= 'landing')),
 )

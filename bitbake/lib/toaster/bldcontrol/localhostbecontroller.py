@@ -32,6 +32,10 @@ from toastermain import settings
 
 from bbcontroller import BuildEnvironmentController, ShellCmdException, BuildSetupException, _getgitcheckoutdirectoryname
 
+import logging
+logger = logging.getLogger("toaster")
+
+
 class LocalhostBEController(BuildEnvironmentController):
     """ Implementation of the BuildEnvironmentController for the localhost;
         this controller manages the default build directory,
@@ -56,8 +60,10 @@ class LocalhostBEController(BuildEnvironmentController):
                 err = "command: %s \n%s" % (command, out)
             else:
                 err = "command: %s \n%s" % (command, err)
+            logger.debug("localhostbecontroller: shellcmd error %s" % err)
             raise ShellCmdException(err)
         else:
+            logger.debug("localhostbecontroller: shellcmd success")
             return out
 
     def _createdirpath(self, path):
@@ -74,28 +80,53 @@ class LocalhostBEController(BuildEnvironmentController):
         self._createdirpath(self.be.builddir)
         self._shellcmd("bash -c \"source %s/oe-init-build-env %s\"" % (self.pokydirname, self.be.builddir))
 
-    def startBBServer(self):
+    def startBBServer(self, brbe):
         assert self.pokydirname and os.path.exists(self.pokydirname)
         assert self.islayerset
-        print("DEBUG: executing ", "bash -c \"source %s/oe-init-build-env %s && DATABASE_URL=%s source toaster start noweb && sleep 1\"" % (self.pokydirname, self.be.builddir, self.dburl))
-        print self._shellcmd("bash -c \"source %s/oe-init-build-env %s && DATABASE_URL=%s source toaster start noweb && sleep 1\"" % (self.pokydirname, self.be.builddir, self.dburl))
-        # FIXME unfortunate sleep 1 - we need to make sure that bbserver is started and the toaster ui is connected
-        # but since they start async without any return, we just wait a bit
-        print "Started server"
+
+        try:
+            os.remove(os.path.join(self.be.builddir, "toaster_ui.log"))
+        except OSError as e:
+            import errno
+            if e.errno != errno.ENOENT:
+                raise
+
+        cmd = "bash -c \"source %s/oe-init-build-env %s && DATABASE_URL=%s source toaster start noweb brbe=%s\"" % (self.pokydirname, self.be.builddir, self.dburl, brbe)
+        port = "-1"
+        for i in self._shellcmd(cmd).split("\n"):
+            if i.startswith("Bitbake server address"):
+                port = i.split(" ")[-1]
+                logger.debug("localhostbecontroller: Found bitbake server port %s" % port)
+
+        def _toaster_ui_started(filepath):
+            if not os.path.exists(filepath):
+                return False
+            with open(filepath, "r") as f:
+                for line in f:
+                    if line.startswith("NOTE: ToasterUI waiting for events"):
+                        return True
+            return False
+
+        while not _toaster_ui_started(os.path.join(self.be.builddir, "toaster_ui.log")):
+            import time
+            logger.debug("localhostbecontroller: Waiting bitbake server to start")
+            time.sleep(0.5)
+
+        logger.debug("localhostbecontroller: Started bitbake server")
         assert self.be.sourcedir and os.path.exists(self.be.builddir)
         self.be.bbaddress = "localhost"
-        self.be.bbport = "8200"
+        self.be.bbport = port
         self.be.bbstate = BuildEnvironment.SERVER_STARTED
         self.be.save()
 
     def stopBBServer(self):
         assert self.pokydirname and os.path.exists(self.pokydirname)
         assert self.islayerset
-        print self._shellcmd("bash -c \"source %s/oe-init-build-env %s && %s source toaster stop\"" %
+        self._shellcmd("bash -c \"source %s/oe-init-build-env %s && %s source toaster stop\"" %
             (self.pokydirname, self.be.builddir, (lambda: "" if self.be.bbtoken is None else "BBTOKEN=%s" % self.be.bbtoken)()))
         self.be.bbstate = BuildEnvironment.SERVER_STOPPED
         self.be.save()
-        print "Stopped server"
+        logger.debug("localhostbecontroller: Stopped bitbake server")
 
     def setLayers(self, bitbakes, layers):
         """ a word of attention: by convention, the first layer for any build will be poky! """
@@ -108,7 +139,7 @@ class LocalhostBEController(BuildEnvironmentController):
         gitrepos = {}
         gitrepos[bitbakes[0].giturl] = []
         gitrepos[bitbakes[0].giturl].append( ("bitbake", bitbakes[0].dirpath, bitbakes[0].commit) )
-        
+
         for layer in layers:
             # we don't process local URLs
             if layer.giturl.startswith("file://"):
@@ -120,15 +151,17 @@ class LocalhostBEController(BuildEnvironmentController):
             commitid = gitrepos[giturl][0][2]
             for e in gitrepos[giturl]:
                 if commitid != e[2]:
-                    raise BuildSetupException("More than one commit per git url, unsupported configuration")
+                    import pprint
+                    raise BuildSetupException("More than one commit per git url, unsupported configuration: \n%s" % pprint.pformat(gitrepos))
 
 
+        logger.debug("localhostbecontroller, our git repos are %s" % gitrepos)
         layerlist = []
 
         # 2. checkout the repositories
         for giturl in gitrepos.keys():
             localdirname = os.path.join(self.be.sourcedir, _getgitcheckoutdirectoryname(giturl))
-            print "DEBUG: giturl ", giturl ,"checking out in current directory", localdirname
+            logger.debug("localhostbecontroller: giturl %s checking out in current directory %s" % (giturl, localdirname))
 
             # make sure our directory is a git repository
             if os.path.exists(localdirname):
@@ -141,13 +174,18 @@ class LocalhostBEController(BuildEnvironmentController):
 
             # branch magic name "HEAD" will inhibit checkout
             if commit != "HEAD":
-                print "DEBUG: checking out commit ", commit, "to", localdirname
+                logger.debug("localhostbecontroller: checking out commit %s to %s " % (commit, localdirname))
                 self._shellcmd("git fetch --all && git checkout \"%s\"" % commit , localdirname)
 
             # take the localdirname as poky dir if we can find the oe-init-build-env
             if self.pokydirname is None and os.path.exists(os.path.join(localdirname, "oe-init-build-env")):
-                print "DEBUG: selected poky dir name", localdirname
+                logger.debug("localhostbecontroller: selected poky dir name %s" % localdirname)
                 self.pokydirname = localdirname
+
+                # make sure we have a working bitbake
+                if not os.path.exists(os.path.join(self.pokydirname, 'bitbake')):
+                    logger.debug("localhostbecontroller: checking bitbake into the poky dirname %s " % self.pokydirname)
+                    self._shellcmd("git clone -b \"%s\" \"%s\" \"%s\" " % (bitbakes[0].commit, bitbakes[0].giturl, os.path.join(self.pokydirname, 'bitbake')))
 
             # verify our repositories
             for name, dirpath, commit in gitrepos[giturl]:
@@ -156,9 +194,9 @@ class LocalhostBEController(BuildEnvironmentController):
                     raise BuildSetupException("Cannot find layer git path '%s' in checked out repository '%s:%s'. Aborting." % (localdirpath, giturl, commit))
 
                 if name != "bitbake":
-                    layerlist.append(localdirpath)
+                    layerlist.append(localdirpath.rstrip("/"))
 
-        print "DEBUG: current layer list ", layerlist
+        logger.debug("localhostbecontroller: current layer list %s " % layerlist)
 
         # 3. configure the build environment, so we have a conf/bblayers.conf
         assert self.pokydirname is not None
@@ -169,17 +207,7 @@ class LocalhostBEController(BuildEnvironmentController):
         if not os.path.exists(bblayerconf):
             raise BuildSetupException("BE is not consistent: bblayers.conf file missing at %s" % bblayerconf)
 
-        conflines = open(bblayerconf, "r").readlines()
-
-        bblayerconffile = open(bblayerconf, "w")
-        for i in xrange(len(conflines)):
-            if conflines[i].startswith("# line added by toaster"):
-                i += 2
-            else:
-                bblayerconffile.write(conflines[i])
-
-        bblayerconffile.write("\n# line added by toaster build control\nBBLAYERS = \"" + " ".join(layerlist) + "\"")
-        bblayerconffile.close()
+        BuildEnvironmentController._updateBBLayers(bblayerconf, layerlist)
 
         self.islayerset = True
         return True

@@ -535,7 +535,7 @@ def verify_checksum(ud, d):
 
     """
 
-    if not ud.method.supports_checksum(ud):
+    if ud.ignore_checksums or not ud.method.supports_checksum(ud):
         return
 
     md5data = bb.utils.md5_file(ud.localpath)
@@ -936,21 +936,20 @@ def get_checksum_file_list(d):
         ud = fetch.ud[u]
 
         if ud and isinstance(ud.method, local.Local):
-            ud.setup_localpath(d)
-            f = ud.localpath
-            pth = ud.decodedurl
-            if '*' in pth:
-                f = os.path.join(os.path.abspath(f), pth)
-            if f.startswith(dl_dir):
-                # The local fetcher's behaviour is to return a path under DL_DIR if it couldn't find the file anywhere else
-                if os.path.exists(f):
-                    bb.warn("Getting checksum for %s SRC_URI entry %s: file not found except in DL_DIR" % (d.getVar('PN', True), os.path.basename(f)))
-                else:
-                    bb.warn("Unable to get checksum for %s SRC_URI entry %s: file could not be found" % (d.getVar('PN', True), os.path.basename(f)))
-            filelist.append(f)
+            paths = ud.method.localpaths(ud, d)
+            for f in paths:
+                pth = ud.decodedurl
+                if '*' in pth:
+                    f = os.path.join(os.path.abspath(f), pth)
+                if f.startswith(dl_dir):
+                    # The local fetcher's behaviour is to return a path under DL_DIR if it couldn't find the file anywhere else
+                    if os.path.exists(f):
+                        bb.warn("Getting checksum for %s SRC_URI entry %s: file not found except in DL_DIR" % (d.getVar('PN', True), os.path.basename(f)))
+                    else:
+                        bb.warn("Unable to get checksum for %s SRC_URI entry %s: file could not be found" % (d.getVar('PN', True), os.path.basename(f)))
+                filelist.append(f + ":" + str(os.path.exists(f)))
 
     return " ".join(filelist)
-
 
 def get_file_checksums(filelist, pn):
     """Get a list of the checksums for a list of local files
@@ -981,6 +980,10 @@ def get_file_checksums(filelist, pn):
 
     checksums = []
     for pth in filelist.split():
+        exist = pth.split(":")[1]
+        if exist == "False":
+            continue
+        pth = pth.split(":")[0]
         if '*' in pth:
             # Handle globs
             for f in glob.glob(pth):
@@ -988,14 +991,12 @@ def get_file_checksums(filelist, pn):
                     checksums.extend(checksum_dir(f))
                 else:
                     checksum = checksum_file(f)
-                    if checksum:
-                        checksums.append((f, checksum))
+                    checksums.append((f, checksum))
         elif os.path.isdir(pth):
             checksums.extend(checksum_dir(pth))
         else:
             checksum = checksum_file(pth)
-            if checksum:
-                checksums.append((pth, checksum))
+            checksums.append((pth, checksum))
 
     checksums.sort(key=operator.itemgetter(1))
     return checksums
@@ -1041,6 +1042,7 @@ class FetchData(object):
             self.sha256_expected = None
         else:
             self.sha256_expected = d.getVarFlag("SRC_URI", self.sha256_name)
+        self.ignore_checksums = False
 
         self.names = self.parm.get("name",'default').split(',')
 
@@ -1198,7 +1200,7 @@ class FetchMethod(object):
                      (file, urldata.parm.get('unpack')))
 
         dots = file.split(".")
-        if dots[-1] in ['gz', 'bz2', 'Z', 'xz']:
+        if dots[-1] in ['gz', 'bz2', 'Z', 'xz', 'lz']:
             efile = os.path.join(rootdir, os.path.basename('.'.join(dots[0:-1])))
         else:
             efile = file
@@ -1219,6 +1221,10 @@ class FetchMethod(object):
                 cmd = 'xz -dc %s | tar x --no-same-owner -f -' % file
             elif file.endswith('.xz'):
                 cmd = 'xz -dc %s > %s' % (file, efile)
+            elif file.endswith('.tar.lz'):
+                cmd = 'lzip -dc %s | tar x --no-same-owner -f -' % file
+            elif file.endswith('.lz'):
+                cmd = 'lzip -dc %s > %s' % (file, efile)
             elif file.endswith('.zip') or file.endswith('.jar'):
                 try:
                     dos = bb.utils.to_boolean(urldata.parm.get('dos'), False)

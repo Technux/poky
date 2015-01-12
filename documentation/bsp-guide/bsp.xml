@@ -35,12 +35,12 @@
                 Collectively, you can think of the base directory, its file structure,
                 and the contents as a BSP Layer.
                 Although not a strict requirement, layers in the Yocto Project use the
-                following well established naming convention:
+                following well-established naming convention:
                 <literallayout class='monospaced'>
      meta-<replaceable>bsp_name</replaceable>
                 </literallayout>
                 The string "meta-" is prepended to the machine or platform name, which is
-                "bsp_name" in the above form.
+                <replaceable>bsp_name</replaceable> in the above form.
             </para>
 
             <para>
@@ -58,7 +58,7 @@
                 Each of these layers is a repository unto itself and clicking on a
                 layer reveals information that includes two links from which you can choose
                 to set up a clone of the layer's repository on your local host system.
-                Here is an example that clones the Minnow Board BSP layer:
+                Here is an example that clones the MinnowBoard BSP layer:
                 <literallayout class='monospaced'>
      $ git clone git://git.yoctoproject.org/meta-minnow
                 </literallayout>
@@ -115,8 +115,9 @@
 
             <para>
                 Some layers function as a layer to hold other BSP layers.
-                An example of this type of layer is the <filename>meta-intel</filename> layer.
-                The <filename>meta-intel</filename> layer contains many individual BSP layers.
+                An example of this type of layer is the <filename>meta-intel</filename> layer,
+                which contains a number of individual BSP sub-layers, as well as a directory
+                named <filename>common/</filename> full of common content across those layers.
             </para>
 
             <para>
@@ -131,8 +132,8 @@
             <title>Example Filesystem Layout</title>
 
             <para>
-                Providing a common form allows end-users to understand and become familiar
-                with the layout.
+                Defining a common BSP directory structure allows end-users to understand and
+                become familiar with that structure.
                 A common format also encourages standardization of software support of hardware.
             </para>
 
@@ -200,25 +201,17 @@
      meta-crownbay/conf/
      meta-crownbay/conf/layer.conf
      meta-crownbay/conf/machine/
-     meta-crownbay/conf/machine/crownbay.conf
      meta-crownbay/conf/machine/crownbay-noemgd.conf
      meta-crownbay/recipes-bsp/
      meta-crownbay/recipes-bsp/formfactor/
      meta-crownbay/recipes-bsp/formfactor/formfactor_0.0.bbappend
      meta-crownbay/recipes-bsp/formfactor/formfactor/
-     meta-crownbay/recipes-bsp/formfactor/formfactor/crownbay/
-     meta-crownbay/recipes-bsp/formfactor/formfactor/crownbay/machconfig
      meta-crownbay/recipes-bsp/formfactor/formfactor/crownbay-noemgd/
      meta-crownbay/recipes-bsp/formfactor/formfactor/crownbay-noemgd/machconfig
-     meta-crownbay/recipes-graphics/
-     meta-crownbay/recipes-graphics/xorg-xserver/
-     meta-crownbay/recipes-graphics/xorg-xserver/xserver-xf86-config_0.1.bbappend
-     meta-crownbay/recipes-graphics/xorg-xserver/xserver-xf86-config/
-     meta-crownbay/recipes-graphics/xorg-xserver/xserver-xf86-config/crownbay/
-     meta-crownbay/recipes-graphics/xorg-xserver/xserver-xf86-config/crownbay/xorg.conf
      meta-crownbay/recipes-kernel/
+     meta-crownbay/recipes-kernel/kmod
+     meta-crownbay/recipes-kernel/kmod/kmod_git.bbappend
      meta-crownbay/recipes-kernel/linux/
-     meta-crownbay/recipes-kernel/linux/linux-yocto-dev.bbappend
      meta-crownbay/recipes-kernel/linux/linux-yocto-rt_3.10.bbappend
      meta-crownbay/recipes-kernel/linux/linux-yocto_3.10.bbappend
                 </literallayout>
@@ -351,9 +344,11 @@
      BBFILES += "${LAYERDIR}/recipes-*/*/*.bb \
              ${LAYERDIR}/recipes-*/*/*.bbappend"
 
-     BBFILE_COLLECTIONS += "bsp"
-     BBFILE_PATTERN_bsp = "^${LAYERDIR}/"
-     BBFILE_PRIORITY_bsp = "6"
+     BBFILE_COLLECTIONS += "<replaceable>bsp</replaceable>"
+     BBFILE_PATTERN_<replaceable>bsp</replaceable> = "^${LAYERDIR}/"
+     BBFILE_PRIORITY_<replaceable>bsp</replaceable> = "6"
+
+     LAYERDEPENDS_<replaceable>bsp</replaceable> = "intel"
                 </literallayout>
             </para>
 
@@ -361,9 +356,18 @@
                 To illustrate the string substitutions, here are the corresponding statements
                 from the Crown Bay <filename>conf/layer.conf</filename> file:
                <literallayout class='monospaced'>
+     # We have a conf and classes directory, add to BBPATH
+     BBPATH .= ":${LAYERDIR}"
+
+     # We have a recipes directory, add to BBFILES
+     BBFILES += "${LAYERDIR}/recipes-*/*/*.bb \
+	     ${LAYERDIR}/recipes-*/*/*.bbappend"
+
      BBFILE_COLLECTIONS += "crownbay"
-     BBFILE_PATTERN_crownbay = "^${LAYERDIR}/"
+     BBFILE_PATTERN_crownbay := "^${LAYERDIR}/"
      BBFILE_PRIORITY_crownbay = "6"
+
+     LAYERDEPENDS_crownbay = "intel"
                 </literallayout>
             </para>
 
@@ -425,12 +429,12 @@
 
             <para>
                 To use an include file, you simply include them in the machine configuration file.
-                For example, the Crown Bay BSP <filename>crownbay.conf</filename> contains the
+                For example, the Crown Bay BSP <filename>crownbay-noemgd.conf</filename> contains the
                 following statements:
                 <literallayout class='monospaced'>
-     require conf/machine/include/intel-core2-32-common.inc
      require conf/machine/include/meta-intel.inc
-     require conf/machine/include/meta-intel-emgd.inc
+     require conf/machine/include/intel-core2-32-common.inc
+     require conf/machine/include/intel-common-pkgarch.inc
                 </literallayout>
             </para>
             </section>
@@ -452,11 +456,10 @@
                 append file used to augment the recipe that starts the build.
                 Furthermore, there are machine-specific settings used during the
                 build that are defined by the <filename>machconfig</filename> file.
-                In the Crown Bay example, two <filename>machconfig</filename> files
-                exist: one that supports the Intel® Embedded Media and Graphics
-                Driver (Intel® EMGD) and one that does not:
+                In the Crown Bay example, the <filename>machconfig</filename> file
+                supports the Video Electronics Standards Association (VESA) graphics
+                driver:
                 <literallayout class='monospaced'>
-     meta-crownbay/recipes-bsp/formfactor/formfactor/crownbay/machconfig
      meta-crownbay/recipes-bsp/formfactor/formfactor/crownbay-noemgd/machconfig
      meta-crownbay/recipes-bsp/formfactor/formfactor_0.0.bbappend
                 </literallayout>
@@ -485,13 +488,17 @@
                 This optional directory contains recipes for the BSP if it has
                 special requirements for graphics support.
                 All files that are needed for the BSP to support a display are kept here.
-                For example, the Crown Bay BSP's <filename>xorg.conf</filename> file
-                detects the graphics support needed (i.e. the Intel® Embedded Media
-                Graphics Driver (EMGD) or the Video Electronics Standards Association
-                (VESA) graphics):
+                For example, the <filename>meta-emenlow</filename> layer, which supports
+                the eMenlow platform consisting of the
+                <trademark class='registered'>Intel</trademark>
+                <trademark class='trade'>Atom</trademark>
+                Z5xx processor with the
+                <trademark class='registered'>Intel</trademark>
+                System Controller Hub US15W uses these files for supporting the Video
+                Electronics Standards Association (VESA) graphics:
                 <literallayout class='monospaced'>
-     meta-crownbay/recipes-graphics/xorg-xserver/xserver-xf86-config_0.1.bbappend
-     meta-crownbay/recipes-graphics/xorg-xserver/xserver-xf86-config/crownbay/xorg.conf
+     meta-emenlow/recipes-graphics/xorg-xserver/xserver-xf86-config_0.1.bbappend
+     meta-emenlow/recipes-graphics/xorg-xserver/xserver-xf86-config/emenlow-noemgd/xorg.conf
                 </literallayout>
             </para>
             </section>
@@ -501,7 +508,7 @@
             <para>
                 You can find these files in the BSP Layer at:
                 <literallayout class='monospaced'>
-     meta-<replaceable>bsp_name</replaceable>/recipes-kernel/linux/linux-yocto_*.bbappend
+     meta-<replaceable>bsp_name</replaceable>/recipes-kernel/linux/linux-yocto*.bbappend
                 </literallayout>
             </para>
 
@@ -548,26 +555,14 @@
      FILESEXTRAPATHS_prepend := "${THISDIR}/${PN}:"
 
 
-     COMPATIBLE_MACHINE_crownbay = "crownbay"
-     KMACHINE_crownbay = "crownbay"
-     KBRANCH_crownbay = "standard/crownbay"
-     KERNEL_FEATURES_append_crownbay = " features/drm-emgd/drm-emgd-1.18 cfg/vesafb"
-
      COMPATIBLE_MACHINE_crownbay-noemgd = "crownbay-noemgd"
      KMACHINE_crownbay-noemgd = "crownbay"
      KBRANCH_crownbay-noemgd = "standard/crownbay"
      KERNEL_FEATURES_append_crownbay-noemgd = " cfg/vesafb"
 
-     LINUX_VERSION_crownbay = "3.10.35"
-     SRCREV_meta_crownbay = "b6e58b33dd427fe471f8827c83e311acdf4558a4"
-     SRCREV_machine_crownbay = "cee957655fe67826b2e827e2db41f156fa8f0cc4"
-     SRCREV_emgd_crownbay = "42d5e4548e8e79e094fa8697949eed4cf6af00a3"
-
-     LINUX_VERSION_crownbay-noemgd = "3.10.35"
-     SRCREV_meta_crownbay-noemgd = "b6e58b33dd427fe471f8827c83e311acdf4558a4"
-     SRCREV_machine_crownbay-noemgd = "cee957655fe67826b2e827e2db41f156fa8f0cc4"
-
-     SRC_URI_crownbay = "git://git.yoctoproject.org/linux-yocto-3.10.git;protocol=git;nocheckout=1;branch=${KBRANCH},${KMETA},emgd-1.18;name=machine,meta,emgd"
+     LINUX_VERSION_crownbay-noemgd = "3.10.55"
+     SRCREV_meta_crownbay-noemgd = "f79a00265eefbe2fffc2cdb03f67235497a9a87e"
+     SRCREV_machine_crownbay-noemgd = "3677ea7f9476458aa6dec440243de3a6fb1343a9"
                 </literallayout>
                 This append file contains statements used to support the Crown Bay BSP.
                 The file defines machines using the
@@ -583,14 +578,11 @@
                 The
                 <ulink url='&YOCTO_DOCS_REF_URL;#var-KERNEL_FEATURES'><filename>KERNEL_FEATURES</filename></ulink>
                 variable enables features specific to the kernel
-                (e.g. graphics support in this case).
+                (e.g. VESA graphics support in this case).
                 The append file points to specific commits in the
                 <ulink url='&YOCTO_DOCS_DEV_URL;#source-directory'>Source Directory</ulink> Git
                 repository and the <filename>meta</filename> Git repository branches to identify the
                 exact kernel needed to build the Crown Bay BSP.
-                Finally, the file includes the
-                <ulink url='&YOCTO_DOCS_REF_URL;#var-SRC_URI'><filename>SRC_URI</filename></ulink>
-                statement to locate the source files.
             </para>
 
             <para>
@@ -910,8 +902,15 @@
                        <filename>recipes-bsp</filename>, <filename>recipes-graphics</filename>,
                        <filename>recipes-core</filename>, and so forth).
                        </para></listitem>
-                   <listitem><para>Place the BSP-specific files in the directory named for
-                       your machine inside the BSP layer.
+                   <listitem><para>Place the BSP-specific files in the proper directory
+                       inside the BSP layer.
+                       How expansive the layer is affects where you must place these files.
+                       For example, if your layer supports several different machine types,
+                       you need to be sure your layer's directory structure includes hierarchy
+                       that separates the files out according to machine.
+                       If your layer does not support multiple machines, the layer would not
+                       have that additional hierarchy and the files would obviously not be
+                       able to reside in a machine-specific directory.
                        </para></listitem>
                </itemizedlist>
            </para>
@@ -920,7 +919,8 @@
                Following is a specific example to help you better understand the process.
                Consider an example that customizes a recipe by adding
                a BSP-specific configuration file named <filename>interfaces</filename> to the
-               <filename>init-ifupdown_1.0.bb</filename> recipe for machine "xyz".
+               <filename>init-ifupdown_1.0.bb</filename> recipe for machine "xyz" where the
+               BSP layer also supports several other machines.
                Do the following:
                <orderedlist>
                    <listitem><para>Edit the <filename>init-ifupdown_1.0.bbappend</filename> file so that it
@@ -934,8 +934,17 @@
                    <listitem><para>Create and place the new <filename>interfaces</filename>
                        configuration file in the BSP's layer here:
                        <literallayout class='monospaced'>
-     meta-xyz/recipes-core/init-ifupdown/files/xyz/interfaces
+     meta-xyz/recipes-core/init-ifupdown/files/xyz-machine-one/interfaces
                        </literallayout>
+                       <note>
+                           If the <filename>meta-xyz</filename> layer did not support
+                           multiple machines, you would place the
+                           <filename>interfaces</filename> configuration file in the
+                           layer here:
+                           <literallayout class='monospaced'>
+     meta-xyz/recipes-core/init-ifupdown/files/interfaces
+                           </literallayout>
+                       </note>
                        The
                        <ulink url='&YOCTO_DOCS_REF_URL;#var-FILESEXTRAPATHS'><filename>FILESEXTRAPATHS</filename></ulink>
                        variable in the append files extends the search path
@@ -1242,12 +1251,13 @@
                     <literallayout class='monospaced'>
      $ yocto-bsp list karch
      Architectures available:
-         powerpc
-         i386
-         x86_64
-         arm
          qemu
+         arm
          mips
+         x86_64
+         i386
+         powerpc
+         mips64
                     </literallayout>
                 </para>
 
@@ -1288,26 +1298,25 @@
 	     3) ARM     (32-bit)
 	     4) PowerPC (32-bit)
 	     5) MIPS    (32-bit)
+             6) MIPS64  (64-bit)
      3
-     Would you like to use the default (3.10) kernel? (y/n) [default: y] y
+     Would you like to use the default (3.17) kernel? (y/n) [default: y] y
      Do you need a new machine branch for this BSP (the alternative is to re-use an existing branch)? [y/n] [default: y]
-     Getting branches from remote repo git://git.yoctoproject.org/linux-yocto-3.10.git...
+     Getting branches from remote repo git://git.yoctoproject.org/linux-yocto-3.17.git...
      Please choose a machine branch to base your new BSP branch on: [default: standard/base]
 	     1) standard/arm-versatile-926ejs
 	     2) standard/base
 	     3) standard/beagleboard
 	     4) standard/beaglebone
 	     5) standard/ck
-	     6) standard/crownbay
-	     7) standard/edgerouter
-             8) standard/emenlow
-	     9) standard/fri2
-	     10) standard/fsl-mpc8315e-rdb
-	     11) standard/mti-malta32
-	     12) standard/mti-malta64
+             6) standard/common-pc
+             7) standard/crownbay
+             8) standard/edgerouter
+             9) standard/fsl-mpc8315e-rdb
+             10) standard/mti-malta32
+             11) standard/mti-malta64
+             12) standard/qemuarm64
 	     13) standard/qemuppc
-	     14) standard/routerstationpro
-	     15) standard/sys940x
      1
      Would you like SMP support? (y/n) [default: y]
      Does your BSP have a touchscreen? (y/n) [default: n]
@@ -1322,7 +1331,7 @@
                             In the example, we use the ARM architecture.
                             </para></listitem>
                         <listitem><para>The script then prompts you for the kernel.
-                            The default 3.14 kernel is acceptable.
+                            The default 3.17 kernel is acceptable.
                             So, the example accepts the default.
                             If you enter 'n', the script prompts you to further enter the kernel
                             you do want to use.</para></listitem>
@@ -1351,7 +1360,7 @@
                         <listitem><para>By default, the script creates the new BSP Layer in the
                             current working directory of the
                             <ulink url='&YOCTO_DOCS_DEV_URL;#source-directory'>Source Directory</ulink>,
-                            which is <filename>poky</filename> in this case.
+                            (i.e. <filename>poky/build</filename>).
                             </para></listitem>
                     </orderedlist>
                 </para>

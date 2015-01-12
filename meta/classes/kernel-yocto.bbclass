@@ -1,5 +1,3 @@
-S = "${WORKDIR}/linux"
-
 # remove tasks that modify the source tree in case externalsrc is inherited
 SRCTREECOVEREDTASKS += "do_kernel_link_vmlinux do_kernel_configme do_validate_branches do_kernel_configcheck do_kernel_checkout do_patch"
 
@@ -131,7 +129,7 @@ do_patch() {
 	# check to see if the specified SRCREV is reachable from the final branch.
 	# if it wasn't something wrong has happened, and we should error.
 	if [ "${machine_srcrev}" != "AUTOINC" ]; then
-		if ! [ "$(git rev-parse --verify ${machine_srcrev})" = "$(git merge-base ${machine_srcrev} HEAD)" ]; then
+		if ! [ "$(git rev-parse --verify ${machine_srcrev}~0)" = "$(git merge-base ${machine_srcrev} HEAD)" ]; then
 			bberror "SRCREV ${machine_srcrev} was specified, but is not reachable"
 			bbfatal "Check the BSP description for incorrect branch selection, or other errors."
 		fi
@@ -181,9 +179,11 @@ do_kernel_checkout() {
 			bberror "S is not set to the linux source directory. Check "
 			bbfatal "the recipe and set S to the proper extracted subdirectory"
 		fi
+		rm -f .gitignore
 		git init
 		git add .
 		git commit -q -m "baseline commit: creating repo for ${PN}-${PV}"
+		git clean -d -f
 	fi
 	# end debare
 
@@ -212,7 +212,7 @@ do_kernel_checkout() {
 	machine_branch="${@ get_machine_branch(d, "${KBRANCH}" )}"
 	git show-ref --quiet --verify -- "refs/heads/${machine_branch}"
 	if [ $? -eq 0 ]; then
-		machine_branch = "master"
+		machine_branch="master"
 	fi
 
 	# checkout and clobber any unimportant files
@@ -288,12 +288,14 @@ do_validate_branches() {
 	# check and we can exit early
 	if [ "${machine_srcrev}" = "AUTOINC" ]; then
 		bbnote "SRCREV validation is not required for AUTOREV"
-	elif [ "${machine_srcrev}" = "" ] && [ "${SRCREV}" != "AUTOINC" ]; then
-		# SRCREV_machine_<MACHINE> was not set. This means that a custom recipe
-		# that doesn't use the SRCREV_FORMAT "machine_meta" is being built. In
-		# this case, we need to reset to the give SRCREV before heading to patching
-		bbnote "custom recipe is being built, forcing SRCREV to ${SRCREV}"
-		force_srcrev="${SRCREV}"
+	elif [ "${machine_srcrev}" = "" ]; then
+		if [ "${SRCREV}" != "AUTOINC" ] && [ "${SRCREV}" != "INVALID" ]; then
+		       # SRCREV_machine_<MACHINE> was not set. This means that a custom recipe
+		       # that doesn't use the SRCREV_FORMAT "machine_meta" is being built. In
+		       # this case, we need to reset to the give SRCREV before heading to patching
+		       bbnote "custom recipe is being built, forcing SRCREV to ${SRCREV}"
+		       force_srcrev="${SRCREV}"
+		fi
 	else
 		git cat-file -t ${machine_srcrev} > /dev/null
 		if [ $? -ne 0 ]; then

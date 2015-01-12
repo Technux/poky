@@ -117,8 +117,32 @@ class BuildEnvironmentController(object):
         self.be = be
         self.connection = None
 
+    @staticmethod
+    def _updateBBLayers(bblayerconf, layerlist):
+        conflines = open(bblayerconf, "r").readlines()
 
-    def startBBServer(self):
+        bblayerconffile = open(bblayerconf, "w")
+        skip = 0
+        for i in xrange(len(conflines)):
+            if skip > 0:
+                skip =- 1
+                continue
+            if conflines[i].startswith("# line added by toaster"):
+                skip = 1
+            else:
+                bblayerconffile.write(conflines[i])
+
+        bblayerconffile.write("# line added by toaster build control\nBBLAYERS = \"" + " ".join(layerlist) + "\"")
+        bblayerconffile.close()
+
+    def writePreConfFile(self, variable_list):
+        prefilepath = os.path.join(self.be.builddir, "conf/toaster-pre.conf")
+        with open(prefilepath, "w") as prefile:
+            for i in variable_list:
+                prefile.write("%s=\"%s\"\n" % (i.name, i.value))
+
+
+    def startBBServer(self, brbe):
         """ Starts a  BB server with Toaster toasterui set up to record the builds, an no controlling UI.
             After this method executes, self.be bbaddress/bbport MUST point to a running and free server,
             and the bbstate MUST be  updated to "started".
@@ -142,12 +166,12 @@ class BuildEnvironmentController(object):
         raise Exception("Must override setLayers")
 
 
-    def getBBController(self):
+    def getBBController(self, brbe):
         """ returns a BitbakeController to an already started server; this is the point where the server
             starts if needed; or reconnects to the server if we can
         """
         if not self.connection:
-            self.startBBServer()
+            self.startBBServer(brbe)
             self.be.lock = BuildEnvironment.LOCK_RUNNING
             self.be.save()
 

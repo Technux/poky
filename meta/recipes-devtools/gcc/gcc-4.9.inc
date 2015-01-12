@@ -71,6 +71,9 @@ SRC_URI = "\
     file://0054-gcc-Makefile.in-fix-parallel-building-failure.patch \
     file://0055-PR-rtl-optimization-61801.patch \
     file://0056-top-level-reorder_gcc-bug-61144.patch \
+    file://0057-aarch64-config.patch \
+    file://0058-gcc-r212171.patch \
+    file://0059-gcc-PR-rtl-optimization-63348.patch \
 "
 SRC_URI[md5sum] = "fddf71348546af523353bd43d34919c1"
 SRC_URI[sha256sum] = "d334781a124ada6f38e63b545e2a3b8c2183049515a1abab6d513f109f1d717e"
@@ -122,8 +125,8 @@ EXTRA_OECONF_INTERMEDIATE = "\
 EXTRA_OECONF_append_libc-uclibc = " --disable-decimal-float "
 
 EXTRA_OECONF_PATHS = "\ 
-    --with-gxx-include-dir=${STAGING_DIR_TARGET}${target_includedir}/c++/${BINV} \ 
-    --with-sysroot=${STAGING_DIR_TARGET} \ 
+    --with-gxx-include-dir=/not/exist{target_includedir}/c++/${BINV} \ 
+    --with-sysroot=/not/exist \ 
     --with-build-sysroot=${STAGING_DIR_TARGET} \
 "
 

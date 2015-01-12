@@ -129,6 +129,17 @@
         </para>
     </section>
 
+    <section id='ref-tasks-package_qa'>
+        <title><filename>do_package_qa</filename></title>
+
+        <para>
+            Runs QA checks on packaged files.
+            For more information on these checks, see the
+            <link linkend='ref-classes-insane'><filename>insane</filename></link>
+            class.
+        </para>
+    </section>
+
     <section id='ref-tasks-package_write_deb'>
         <title><filename>do_package_write_deb</filename></title>
 
@@ -313,7 +324,7 @@
         <para>
             You can run this task using BitBake as follows:
             <literallayout class='monospaced'>
-     $ bitbake -c clean &lt;recipe&gt;
+     $ bitbake -c clean <replaceable>recipe</replaceable>
             </literallayout>
         </para>
 
@@ -327,7 +338,7 @@
             If you want to remove the sstate cache files for the recipe,
             you need to use the
             <link linkend='ref-tasks-cleansstate'><filename>do_cleansstate</filename></link>
-            task instead (i.e. <filename>bitbake -c cleansstate &lt;recipe&gt;</filename>).
+            task instead (i.e. <filename>bitbake -c cleansstate</filename> <replaceable>recipe</replaceable>).
         </para>
     </section>
 
@@ -348,7 +359,7 @@
         <para>
             You can run this task using BitBake as follows:
             <literallayout class='monospaced'>
-     $ bitbake -c cleanall &lt;recipe&gt;
+     $ bitbake -c cleanall <replaceable>recipe</replaceable>
             </literallayout>
         </para>
 
@@ -378,7 +389,7 @@
         <para>
             You can run this task using BitBake as follows:
             <literallayout class='monospaced'>
-     $ bitbake -c cleansstate &lt;recipe&gt;
+     $ bitbake -c cleansstate <replaceable>recipe</replaceable>
             </literallayout>
         </para>
 
@@ -393,7 +404,7 @@
                 If you need to build a target from scratch using remote
                 mirrors, use the "-f" option as follows:
                 <literallayout class='monospaced'>
-     $ bitbake -f -c do_cleansstate &lt;target&gt;
+     $ bitbake -f -c do_cleansstate <replaceable>target</replaceable>
                 </literallayout>
             </note>
         </para>

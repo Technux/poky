@@ -27,16 +27,50 @@ from django.db import IntegrityError
 from django.shortcuts import render, redirect
 from orm.models import Build, Target, Task, Layer, Layer_Version, Recipe, LogMessage, Variable
 from orm.models import Task_Dependency, Recipe_Dependency, Package, Package_File, Package_Dependency
-from orm.models import Target_Installed_Package, Target_File, Target_Image_File
+from orm.models import Target_Installed_Package, Target_File, Target_Image_File, BuildArtifact
 from django.views.decorators.cache import cache_control
 from django.core.urlresolvers import reverse
+from django.core.exceptions import MultipleObjectsReturned
 from django.core.paginator import Paginator, EmptyPage, PageNotAnInteger
 from django.http import HttpResponseBadRequest, HttpResponseNotFound
 from django.utils import timezone
 from django.utils.html import escape
 from datetime import timedelta
 from django.utils import formats
+from toastergui.templatetags.projecttags import json as jsonfilter
 import json
+
+# all new sessions should come through the landing page;
+# determine in which mode we are running in, and redirect appropriately
+def landing(request):
+    if toastermain.settings.MANAGED and Build.objects.count() == 0 and Project.objects.count() > 0:
+        return redirect(reverse('all-projects'), permanent = False)
+
+    if Build.objects.all().count() > 0:
+        return redirect(reverse('all-builds'), permanent = False)
+
+    return render(request, 'landing.html')
+
+# returns a list for most recent builds; for use in the Project page, xhr_ updates,  and other places, as needed
+def _project_recent_build_list(prj):
+    return map(lambda x: {
+            "id":  x.pk,
+            "targets" : map(lambda y: {"target": y.target, "task": y.task }, x.brtarget_set.all()),
+            "status": x.get_state_display(),
+            "errors": map(lambda y: {"type": y.errtype, "msg": y.errmsg, "tb": y.traceback}, x.brerror_set.exclude(errmsg__contains="Command Failed")),
+            "build" : map( lambda y: {"id": y.pk,
+                        "status": y.get_outcome_display(),
+                        "completed_on" : y.completed_on.strftime('%s')+"000",
+                        "build_time" : (y.completed_on - y.started_on).total_seconds(),
+                        "build_page_url" : reverse('builddashboard', args=(y.pk,)),
+                        'build_time_page_url': reverse('buildtime', args=(y.pk,)),
+                        "errors": y.errors_no,
+                        "warnings": y.warnings_no,
+                        "completeper": y.completeper(),
+                        "eta": y.eta().strftime('%s')+"000"}, Build.objects.filter(buildrequest = x)),
+        }, list(prj.buildrequest_set.filter(Q(state__lt=BuildRequest.REQ_COMPLETED) or Q(state=BuildRequest.REQ_DELETED)).order_by("-pk")) +
+            list(prj.buildrequest_set.filter(state__in=[BuildRequest.REQ_COMPLETED, BuildRequest.REQ_FAILED]).order_by("-pk")[:3]))
+
 
 def _build_page_range(paginator, index = 1):
     try:
@@ -78,7 +112,7 @@ def _redirect_parameters(view, g, mandatory_parameters, *args, **kwargs):
         params[i] = g[i]
     for i in mandatory_parameters:
         if not i in params:
-            params[i] = mandatory_parameters[i]
+            params[i] = urllib.unquote(str(mandatory_parameters[i]))
 
     return redirect(url + "?%s" % urllib.urlencode(params), *args, **kwargs)
 
@@ -157,6 +191,7 @@ def _get_search_results(search_term, queryset, model):
 
         search_objects.append(reduce(operator.or_, q_map))
     search_object = reduce(operator.and_, search_objects)
+    print "search objects", search_object
     queryset = queryset.filter(search_object)
 
     return queryset
@@ -219,6 +254,8 @@ def _save_parameters_cookies(response, pagesize, orderby, request):
     response.set_cookie(key='orderby', value=html_parser.unescape(orderby), path=request.path)
     return response
 
+
+
 # shows the "all builds" page
 def builds(request):
     template = 'build.html'
@@ -242,7 +279,7 @@ def builds(request):
     build_info = _build_page_range(Paginator(queryset, pagesize), request.GET.get('page', 1))
 
     # build view-specific information; this is rendered specifically in the builds page, at the top of the page (i.e. Recent builds)
-    build_mru = Build.objects.filter(completed_on__gte=(timezone.now()-timedelta(hours=24))).order_by("-started_on")[:3]
+    build_mru = Build.objects.order_by("-started_on")[:3]
 
     # set up list of fstypes for each build
     fstypes_map = {};
@@ -372,20 +409,37 @@ def builds(request):
                  'ordericon':_get_toggle_order_icon(request, "timespent"),
                  'orderkey' : 'timespent',
                 },
-                {'name': 'Log',
+                {'name': 'Image files', 'clclass': 'output',
+                 'qhelp': "The root file system types produced by the build. You can find them in your <code>/build/tmp/deploy/images/</code> directory",
+                    # TODO: compute image fstypes from Target_Image_File
+                },
+                ]
+            }
+
+    if not toastermain.settings.MANAGED:
+        context['tablecols'].insert(-2,
+                {'name': 'Log1',
                  'dclass': "span4",
                  'qhelp': "Path to the build main log file",
                  'clclass': 'log', 'hidden': 1,
                  'orderfield': _get_toggle_order(request, "cooker_log_path"),
                  'ordericon':_get_toggle_order_icon(request, "cooker_log_path"),
                  'orderkey' : 'cooker_log_path',
-                },
-                {'name': 'Output', 'clclass': 'output',
-                 'qhelp': "The root file system types produced by the build. You can find them in your <code>/build/tmp/deploy/images/</code> directory",
-                    # TODO: compute image fstypes from Target_Image_File
-                },
-                ]
-            }
+                }
+        )
+
+
+    if toastermain.settings.MANAGED:
+        context['tablecols'].append(
+                {'name': 'Project', 'clclass': 'project',
+                 'filter': {'class': 'project',
+                        'label': 'Project:',
+                        'options':  map(lambda x: (x.name,'',x.build_set.filter(outcome__lt=Build.IN_PROGRESS).count()), Project.objects.all()),
+
+                       }
+                }
+        )
+
 
     response = render(request, template, context)
     _save_parameters_cookies(response, pagesize, orderby, request)
@@ -401,7 +455,7 @@ def builddashboard( request, build_id ):
     template = "builddashboard.html"
     if Build.objects.filter( pk=build_id ).count( ) == 0 :
         return redirect( builds )
-    build = Build.objects.filter( pk = build_id )[ 0 ];
+    build = Build.objects.get( pk = build_id );
     layerVersionId = Layer_Version.objects.filter( build = build_id );
     recipeCount = Recipe.objects.filter( layer_version__id__in = layerVersionId ).count( );
     tgts = Target.objects.filter( build_id = build_id ).order_by( 'target' );
@@ -421,12 +475,8 @@ def builddashboard( request, build_id ):
             hasImages = True
         npkg = 0
         pkgsz = 0
-        pid= 0
-        tp = Target_Installed_Package.objects.filter( target_id = t.id )
         package = None
-        for p in tp:
-            pid = p.package_id
-            package = Package.objects.get( pk = p.package_id )
+        for package in Package.objects.filter(id__in = [x.package_id for x in t.target_installed_package_set.all()]):
             pkgsz = pkgsz + package.size
             if ( package.installed_name ):
                 npkg = npkg + 1
@@ -439,7 +489,7 @@ def builddashboard( request, build_id ):
             if ( ndx < 0 ):
                 ndx = 0;
             f = i.file_name[ ndx + 1: ]
-            imageFiles.append({ 'path': f, 'size' : i.file_size })
+            imageFiles.append({ 'id': i.id, 'path': f, 'size' : i.file_size })
         if ( t.is_image and
              (( len( imageFiles ) <= 0 ) or ( len( t.license_manifest_path ) <= 0 ))):
             targetHasNoImages = True
@@ -457,6 +507,8 @@ def builddashboard( request, build_id ):
         if ( p.installed_name ):
             packageCount = packageCount + 1
 
+    logmessages = list(LogMessage.objects.filter( build = build_id ))
+
     context = {
             'build'           : build,
             'hasImages'       : hasImages,
@@ -464,7 +516,7 @@ def builddashboard( request, build_id ):
             'targets'         : targets,
             'recipecount'     : recipeCount,
             'packagecount'    : packageCount,
-            'logmessages'     : LogMessage.objects.filter( build = build_id ),
+            'logmessages'     : logmessages,
     }
     return render( request, template, context )
 
@@ -540,14 +592,14 @@ def recipe(request, build_id, recipe_id):
     if Recipe.objects.filter(pk=recipe_id).count() == 0 :
         return redirect(builds)
 
-    object = Recipe.objects.filter(pk=recipe_id)[0]
-    layer_version = Layer_Version.objects.filter(pk=object.layer_version_id)[0]
-    layer  = Layer.objects.filter(pk=layer_version.layer_id)[0]
+    object = Recipe.objects.get(pk=recipe_id)
+    layer_version = Layer_Version.objects.get(pk=object.layer_version_id)
+    layer  = Layer.objects.get(pk=layer_version.layer_id)
     tasks  = Task.objects.filter(recipe_id = recipe_id, build_id = build_id).exclude(order__isnull=True).exclude(task_name__endswith='_setscene').exclude(outcome=Task.OUTCOME_NA)
     packages = Package.objects.filter(recipe_id = recipe_id).filter(build_id = build_id).filter(size__gte=0)
 
     context = {
-            'build'   : Build.objects.filter(pk=build_id)[0],
+            'build'   : Build.objects.get(pk=build_id),
             'object'  : object,
             'layer_version' : layer_version,
             'layer'   : layer,
@@ -576,6 +628,9 @@ def target_common( request, build_id, target_id, variant ):
     queryset = _get_queryset(
             Package, queryset, filter_string, search_term, ordering_string, 'name' )
     packages = _build_page_range( Paginator(queryset, pagesize), request.GET.get( 'page', 1 ))
+
+
+    build = Build.objects.get( pk = build_id )
 
     # bring in package dependencies
     for p in packages.object_list:
@@ -609,8 +664,6 @@ def target_common( request, build_id, target_id, variant ):
     tc_sizePercentage = {
         'name'       : 'Size over total (%)',
         'qhelp'      : 'Proportion of the overall size represented by this package',
-        'orderfield' : _get_toggle_order( request, "size" ),
-        'ordericon'  : _get_toggle_order_icon( request, "size" ),
         'clclass'    : 'size_over_total',
         'hidden'     : 1,
         }
@@ -639,8 +692,7 @@ eans multiple licenses exist that cover different parts of the source',
         tc_dependencies[ "hidden" ] = 1
     tc_rdependencies = {
         'name'       : 'Reverse dependencies',
-        'qhelp'      : 'Package run-time reverse dependencies (i.e. which other packages depend on t\
-his package',
+        'qhelp'      : 'Package run-time reverse dependencies (i.e. which other packages depend on this package',
         'clclass'    : 'brought_in_by',
         }
     if ( variant == 'target' ):
@@ -683,18 +735,10 @@ his package',
         'clclass'    : 'layer_commit',
         'hidden'     : 1,
         }
-    tc_layerDir = {
-        'name':'Layer directory',
-        'qhelp':'Location in disk of the layer providing the recipe that builds the package',
-        'orderfield' : _get_toggle_order( request, "recipe__layer_version__layer__local_path" ),
-        'ordericon'  : _get_toggle_order_icon( request, "recipe__layer_version__layer__local_path" )\
-,
-        'clclass'    : 'layer_directory',
-        'hidden'     : 1,
-        }
+
     context = {
         'objectname': variant,
-        'build'                : Build.objects.filter( pk = build_id )[ 0 ],
+        'build'                : build,
         'target'               : Target.objects.filter( pk = target_id )[ 0 ],
         'objects'              : packages,
         'packages_sum'         : packages_sum[ 'installed_size__sum' ],
@@ -713,9 +757,20 @@ his package',
                     tc_layer,
                     tc_layerBranch,
                     tc_layerCommit,
-                    tc_layerDir,
                 ]
         }
+
+    if not toastermain.settings.MANAGED or build.project is None:
+
+        tc_layerDir = {
+            'name':'Layer directory',
+            'qhelp':'Location in disk of the layer providing the recipe that builds the package',
+            'orderfield' : _get_toggle_order( request, "recipe__layer_version__layer__local_path" ),
+            'ordericon'  : _get_toggle_order_icon( request, "recipe__layer_version__layer__local_path" ),
+            'clclass'    : 'layer_directory',
+            'hidden'     : 1,
+        }
+        context['tablecols'].append(tc_layerDir)
 
     response = render(request, template, context)
     _save_parameters_cookies(response, pagesize, orderby, request)
@@ -814,7 +869,7 @@ def _get_dir_entries(build_id, target_id, start):
     # sort by directories first, then by name
     rsorted = sorted(response, key=lambda entry :  entry['name'])
     rsorted = sorted(rsorted, key=lambda entry :  entry['isdir'], reverse=True)
-    return json.dumps(rsorted, cls=LazyEncoder)
+    return json.dumps(rsorted, cls=LazyEncoder).replace('</', '<\\/')
 
 def dirinfo(request, build_id, target_id, file_path=None):
     template = "dirinfo.html"
@@ -837,8 +892,8 @@ def dirinfo(request, build_id, target_id, file_path=None):
             if head != sep:
                 dir_list.insert(0, head)
 
-    context = { 'build': Build.objects.filter(pk=build_id)[0],
-                'target': Target.objects.filter(pk=target_id)[0],
+    context = { 'build': Build.objects.get(pk=build_id),
+                'target': Target.objects.get(pk=target_id),
                 'packages_sum': packages_sum['installed_size__sum'],
                 'objects': objects,
                 'dir_list': dir_list,
@@ -1078,12 +1133,13 @@ def tasks_common(request, build_id, variant, task_anchor):
     }
     if   'diskio' == variant: tc_diskio['hidden']='0'; del tc_diskio['clclass']; tc_cache['hidden']='1';
 
+    build = Build.objects.get(pk=build_id)
 
     context = { 'objectname': variant,
                 'object_search_display': object_search_display,
                 'filter_search_display': filter_search_display,
                 'title': title_variant,
-                'build': Build.objects.filter(pk=build_id)[0],
+                'build': build,
                 'objects': tasks,
                 'default_orderby' : orderby,
                 'search_term': search_term,
@@ -1099,8 +1155,11 @@ def tasks_common(request, build_id, variant, task_anchor):
                     tc_time,
                     tc_cpu,
                     tc_diskio,
-                    tc_log,
                 ]}
+
+
+    if not toastermain.settings.MANAGED or build.project is None:
+        context['tablecols'].append(tc_log)
 
     response = render(request, template, context)
     _save_parameters_cookies(response, pagesize, orderby, request)
@@ -1148,9 +1207,11 @@ def recipes(request, build_id):
             revlist.append(recipe_dep)
         revs[recipe.id] = revlist
 
+    build = Build.objects.get(pk=build_id)
+
     context = {
         'objectname': 'recipes',
-        'build': Build.objects.filter(pk=build_id)[0],
+        'build': build,
         'objects': recipes,
         'default_orderby' : 'name:+',
         'recipe_deps' : deps,
@@ -1221,6 +1282,11 @@ def recipes(request, build_id):
                 'qhelp':'The Git commit of the layer providing the recipe',
                 'clclass': 'layer_version__layer__commit', 'hidden': 1,
             },
+            ]
+        }
+
+    if not toastermain.settings.MANAGED or build.project is None:
+        context['tablecols'].append(
             {
                 'name':'Layer directory',
                 'qhelp':'Path to the layer prodiving the recipe',
@@ -1228,9 +1294,8 @@ def recipes(request, build_id):
                 'ordericon':_get_toggle_order_icon(request, "layer_version__layer__local_path"),
                 'orderkey' : 'layer_version__layer__local_path',
                 'clclass': 'layer_version__layer__local_path', 'hidden': 1,
-            },
-            ]
-        }
+            })
+
 
     response = render(request, template, context)
     _save_parameters_cookies(response, pagesize, orderby, request)
@@ -1240,15 +1305,23 @@ def configuration(request, build_id):
     template = 'configuration.html'
 
     variables = Variable.objects.filter(build=build_id)
-    BB_VERSION=variables.filter(variable_name='BB_VERSION')[0].variable_value
-    BUILD_SYS=variables.filter(variable_name='BUILD_SYS')[0].variable_value
-    NATIVELSBSTRING=variables.filter(variable_name='NATIVELSBSTRING')[0].variable_value
-    TARGET_SYS=variables.filter(variable_name='TARGET_SYS')[0].variable_value
-    MACHINE=variables.filter(variable_name='MACHINE')[0].variable_value
-    DISTRO=variables.filter(variable_name='DISTRO')[0].variable_value
-    DISTRO_VERSION=variables.filter(variable_name='DISTRO_VERSION')[0].variable_value
-    TUNE_FEATURES=variables.filter(variable_name='TUNE_FEATURES')[0].variable_value
-    TARGET_FPU=variables.filter(variable_name='TARGET_FPU')[0].variable_value
+
+    def _get_variable_or_empty(variable_name):
+        from django.core.exceptions import ObjectDoesNotExist
+        try:
+            return variables.get(variable_name=variable_name).variable_value
+        except ObjectDoesNotExist:
+            return ''
+
+    BB_VERSION=_get_variable_or_empty(variable_name='BB_VERSION')
+    BUILD_SYS=_get_variable_or_empty(variable_name='BUILD_SYS')
+    NATIVELSBSTRING=_get_variable_or_empty(variable_name='NATIVELSBSTRING')
+    TARGET_SYS=_get_variable_or_empty(variable_name='TARGET_SYS')
+    MACHINE=_get_variable_or_empty(variable_name='MACHINE')
+    DISTRO=_get_variable_or_empty(variable_name='DISTRO')
+    DISTRO_VERSION=_get_variable_or_empty(variable_name='DISTRO_VERSION')
+    TUNE_FEATURES=_get_variable_or_empty(variable_name='TUNE_FEATURES')
+    TARGET_FPU=_get_variable_or_empty(variable_name='TARGET_FPU')
 
     targets = Target.objects.filter(build=build_id)
 
@@ -1256,7 +1329,7 @@ def configuration(request, build_id):
                 'objectname': 'configuration',
                 'object_search_display':'variables',
                 'filter_search_display':'variables',
-                'build': Build.objects.filter(pk=build_id)[0],
+                'build': Build.objects.get(pk=build_id),
                 'BB_VERSION':BB_VERSION,
                 'BUILD_SYS':BUILD_SYS,
                 'NATIVELSBSTRING':NATIVELSBSTRING,
@@ -1301,14 +1374,14 @@ def configvars(request, build_id):
         file_filter += 'conf/distro/'
     if filter_string.find('/bitbake.conf') > 0:
         file_filter += '/bitbake.conf'
-    build_dir=re.sub("/tmp/log/.*","",Build.objects.filter(pk=build_id)[0].cooker_log_path)
+    build_dir=re.sub("/tmp/log/.*","",Build.objects.get(pk=build_id).cooker_log_path)
 
     context = {
                 'objectname': 'configvars',
                 'object_search_display':'BitBake variables',
                 'filter_search_display':'variables',
                 'file_filter': file_filter,
-                'build': Build.objects.filter(pk=build_id)[0],
+                'build': Build.objects.get(pk=build_id),
                 'objects' : variables,
                 'total_count':queryset_with_search.count(),
                 'default_orderby' : 'variable_name:+',
@@ -1374,7 +1447,7 @@ def bpackage(request, build_id):
 
     context = {
         'objectname': 'packages built',
-        'build': Build.objects.filter(pk=build_id)[0],
+        'build': Build.objects.get(pk=build_id),
         'objects' : packages,
         'default_orderby' : 'name:+',
         'tablecols':[
@@ -1457,13 +1530,13 @@ def bpackage(request, build_id):
 def bfile(request, build_id, package_id):
     template = 'bfile.html'
     files = Package_File.objects.filter(package = package_id)
-    context = {'build': Build.objects.filter(pk=build_id)[0], 'objects' : files}
+    context = {'build': Build.objects.get(pk=build_id), 'objects' : files}
     return render(request, template, context)
 
 def tpackage(request, build_id, target_id):
     template = 'package.html'
     packages = map(lambda x: x.package, list(Target_Installed_Package.objects.filter(target=target_id)))
-    context = {'build': Build.objects.filter(pk=build_id)[0], 'objects' : packages}
+    context = {'build': Build.objects.get(pk=build_id), 'objects' : packages}
     return render(request, template, context)
 
 def layer(request):
@@ -1485,7 +1558,7 @@ def layer_versions_recipes(request, layerversion_id):
     recipes = Recipe.objects.filter(layer_version__id = layerversion_id)
 
     context = {'objects': recipes,
-            'layer_version' : Layer_Version.objects.filter( id = layerversion_id )[0]
+            'layer_version' : Layer_Version.objects.get( id = layerversion_id )
     }
 
     return render(request, template, context)
@@ -1616,10 +1689,10 @@ def package_built_detail(request, build_id, package_id):
     (filter_string, search_term, ordering_string) = _search_tuple(request, Package_File)
     paths = _get_queryset(Package_File, queryset, filter_string, search_term, ordering_string, 'path')
 
-    package = Package.objects.filter(pk=package_id)[0]
+    package = Package.objects.get(pk=package_id)
     package.fullpackagespec = _get_fullpackagespec(package)
     context = {
-            'build' : Build.objects.filter(pk=build_id)[0],
+            'build' : Build.objects.get(pk=build_id),
             'package' : package,
             'dependency_count' : _get_package_dependency_count(package, -1, False),
             'objects' : paths,
@@ -1649,11 +1722,11 @@ def package_built_dependencies(request, build_id, package_id):
     if Build.objects.filter(pk=build_id).count() == 0 :
          return redirect(builds)
 
-    package = Package.objects.filter(pk=package_id)[0]
+    package = Package.objects.get(pk=package_id)
     package.fullpackagespec = _get_fullpackagespec(package)
     dependencies = _get_package_dependencies(package_id)
     context = {
-            'build' : Build.objects.filter(pk=build_id)[0],
+            'build' : Build.objects.get(pk=build_id),
             'package' : package,
             'runtime_deps' : dependencies['runtime_deps'],
             'other_deps' :   dependencies['other_deps'],
@@ -1678,12 +1751,12 @@ def package_included_detail(request, build_id, target_id, package_id):
     queryset = Package_File.objects.filter(package_id__exact=package_id)
     paths = _get_queryset(Package_File, queryset, filter_string, search_term, ordering_string, 'path')
 
-    package = Package.objects.filter(pk=package_id)[0]
+    package = Package.objects.get(pk=package_id)
     package.fullpackagespec = _get_fullpackagespec(package)
     package.alias = _get_package_alias(package)
-    target = Target.objects.filter(pk=target_id)[0]
+    target = Target.objects.get(pk=target_id)
     context = {
-            'build' : Build.objects.filter(pk=build_id)[0],
+            'build' : Build.objects.get(pk=build_id),
             'target'  : target,
             'package' : package,
             'reverse_count' : _get_package_reverse_dep_count(package, target_id),
@@ -1714,14 +1787,14 @@ def package_included_dependencies(request, build_id, target_id, package_id):
     if Build.objects.filter(pk=build_id).count() == 0 :
         return redirect(builds)
 
-    package = Package.objects.filter(pk=package_id)[0]
+    package = Package.objects.get(pk=package_id)
     package.fullpackagespec = _get_fullpackagespec(package)
     package.alias = _get_package_alias(package)
-    target = Target.objects.filter(pk=target_id)[0]
+    target = Target.objects.get(pk=target_id)
 
     dependencies = _get_package_dependencies(package_id, target_id)
     context = {
-            'build' : Build.objects.filter(pk=build_id)[0],
+            'build' : Build.objects.get(pk=build_id),
             'package' : package,
             'target' : target,
             'runtime_deps' : dependencies['runtime_deps'],
@@ -1746,16 +1819,16 @@ def package_included_reverse_dependencies(request, build_id, target_id, package_
     queryset = Package_Dependency.objects.select_related('depends_on__name', 'depends_on__size').filter(depends_on=package_id, target_id=target_id, dep_type=Package_Dependency.TYPE_TRDEPENDS)
     objects = _get_queryset(Package_Dependency, queryset, filter_string, search_term, ordering_string, 'package__name')
 
-    package = Package.objects.filter(pk=package_id)[0]
+    package = Package.objects.get(pk=package_id)
     package.fullpackagespec = _get_fullpackagespec(package)
     package.alias = _get_package_alias(package)
-    target = Target.objects.filter(pk=target_id)[0]
+    target = Target.objects.get(pk=target_id)
     for o in objects:
         if o.package.version != '':
             o.package.version += '-' + o.package.revision
         o.alias = _get_package_alias(o.package)
     context = {
-            'build' : Build.objects.filter(pk=build_id)[0],
+            'build' : Build.objects.get(pk=build_id),
             'package' : package,
             'target' : target,
             'objects' : objects,
@@ -1801,7 +1874,7 @@ if toastermain.settings.MANAGED:
     from django.contrib.auth.decorators import login_required
 
     from orm.models import Project, ProjectLayer, ProjectTarget, ProjectVariable
-    from orm.models import Branch, LayerSource, ToasterSetting, Release, Machine
+    from orm.models import Branch, LayerSource, ToasterSetting, Release, Machine, LayerVersionDependency
     from bldcontrol.models import BuildRequest
 
     import traceback
@@ -1812,10 +1885,14 @@ if toastermain.settings.MANAGED:
     def managedcontextprocessor(request):
         ret = {
             "projects": Project.objects.all(),
-            "MANAGED" : toastermain.settings.MANAGED
+            "MANAGED" : toastermain.settings.MANAGED,
+            "DEBUG" : toastermain.settings.DEBUG
         }
         if 'project_id' in request.session:
-            ret['project'] = Project.objects.get(pk = request.session['project_id'])
+            try:
+                ret['project'] = Project.objects.get(pk = request.session['project_id'])
+            except Project.DoesNotExist:
+                del request.session['project_id']
         return ret
 
     # new project
@@ -1824,16 +1901,19 @@ if toastermain.settings.MANAGED:
         context = {
             'email': request.user.email if request.user.is_authenticated() else '',
             'username': request.user.username if request.user.is_authenticated() else '',
-            'releases': Release.objects.order_by("id"),
-            'defaultbranch': ToasterSetting.objects.get(name = "DEFAULT_RELEASE").value,
+            'releases': Release.objects.order_by("description"),
         }
 
+        try:
+            context['defaultbranch'] = ToasterSetting.objects.get(name = "DEFAULT_RELEASE").value
+        except ToasterSetting.DoesNotExist:
+            pass
 
         if request.method == "GET":
             # render new project page
             return render(request, template, context)
         elif request.method == "POST":
-            mandatory_fields = ['projectname', 'email', 'username', 'projectversion']
+            mandatory_fields = ['projectname', 'projectversion']
             try:
                 # make sure we have values for all mandatory_fields
                 if reduce( lambda x, y: x or y, map(lambda x: len(request.POST.get(x, '')) == 0, mandatory_fields)):
@@ -1842,19 +1922,18 @@ if toastermain.settings.MANAGED:
             ", ".join([x for x in mandatory_fields if len(request.POST.get(x, '')) == 0 ]))
 
                 if not request.user.is_authenticated():
-                    user = authenticate(username = request.POST['username'], password = 'nopass')
+                    user = authenticate(username = request.POST.get('username', '_anonuser'), password = 'nopass')
                     if user is None:
-                        user = User.objects.create_user(username = request.POST['username'], email = request.POST['email'], password = "nopass")
+                        user = User.objects.create_user(username = request.POST.get('username', '_anonuser'), email = request.POST.get('email', ''), password = "nopass")
 
                         user = authenticate(username = user.username, password = 'nopass')
                     login(request, user)
 
                 #  save the project
-                prj = Project.objects.create_project(name = request.POST['projectname'],
-                    release = Release.objects.get(pk = request.POST['projectversion']))
+                prj = Project.objects.create_project(name = request.POST['projectname'], release = Release.objects.get(pk = request.POST['projectversion']))
                 prj.user_id = request.user.pk
                 prj.save()
-                return redirect(reverse(project, args = (prj.pk,)))
+                return redirect(reverse(project, args = (prj.pk,)) + "#/newproject")
 
             except (IntegrityError, BadParameterException) as e:
                 # fill in page with previously submitted values
@@ -1866,6 +1945,8 @@ if toastermain.settings.MANAGED:
                 return render(request, template, context)
 
         raise Exception("Invalid HTTP method for this page")
+
+
 
     # Shows the edit project page
     def project(request, pid):
@@ -1883,78 +1964,379 @@ if toastermain.settings.MANAGED:
         # we use implicit knowledge of the current user's project to filter layer information, e.g.
         request.session['project_id'] = prj.id
 
+        from collections import Counter
+        freqtargets = []
+        try:
+            freqtargets += map(lambda x: x.target, reduce(lambda x, y: x + y,   map(lambda x: list(x.target_set.all()), Build.objects.filter(project = prj, outcome__lt = Build.IN_PROGRESS))))
+            freqtargets += map(lambda x: x.target, reduce(lambda x, y: x + y,   map(lambda x: list(x.brtarget_set.all()), BuildRequest.objects.filter(project = prj, state__lte = BuildRequest.REQ_QUEUED))))
+        except TypeError:
+            pass
+        freqtargets = Counter(freqtargets)
+        freqtargets = sorted(freqtargets, key = lambda x: freqtargets[x])
+
         context = {
             "project" : prj,
+            "completedbuilds": Build.objects.filter(project = prj).exclude(outcome = Build.IN_PROGRESS),
+            "prj" : {"name": prj.name, "release": { "id": prj.release.pk, "name": prj.release.name, "desc": prj.release.description}},
             #"buildrequests" : prj.buildrequest_set.filter(state=BuildRequest.REQ_QUEUED),
-            "buildrequests" : map(lambda x: (x, {"machine" : x.brvariable_set.filter(name="MACHINE")[0]}), prj.buildrequest_set.filter(state__lt = BuildRequest.REQ_INPROGRESS).order_by("-pk")),
-            "builds" : prj.build_set.all(),
-            "puser": puser,
+            "builds" : _project_recent_build_list(prj),
+            "layers" :  map(lambda x: {
+                        "id": x.layercommit.pk,
+                        "orderid": x.pk,
+                        "name" : x.layercommit.layer.name,
+                        "giturl": x.layercommit.layer.vcs_url,
+                        "url": x.layercommit.layer.layer_index_url,
+                        "layerdetailurl": reverse("layerdetails", args=(x.layercommit.pk,)),
+                # This branch name is actually the release
+                        "branch" : { "name" : x.layercommit.commit, "layersource" : x.layercommit.up_branch.layer_source.name}},
+                    prj.projectlayer_set.all().order_by("id")),
+            "targets" : map(lambda x: {"target" : x.target, "task" : x.task, "pk": x.pk}, prj.projecttarget_set.all()),
+            "freqtargets": freqtargets,
+            "releases": map(lambda x: {"id": x.pk, "name": x.name, "description":x.description}, Release.objects.all()),
         }
         try:
-            context["machine"] = prj.projectvariable_set.get(name="MACHINE").value
+            context["machine"] = {"name": prj.projectvariable_set.get(name="MACHINE").value}
         except ProjectVariable.DoesNotExist:
-            context["machine"] = "-- not set yet"
-
+            context["machine"] = None
         try:
             context["distro"] = prj.projectvariable_set.get(name="DISTRO").value
         except ProjectVariable.DoesNotExist:
             context["distro"] = "-- not set yet"
 
+        response = render(request, template, context)
+        response['Cache-Control'] = "no-cache, must-revalidate, no-store"
+        response['Pragma'] = "no-cache"
+        return response
 
-        return render(request, template, context)
-
-    import json
+    # This is a wrapper for xhr_projectbuild which allows for a project id
+    # which only becomes known client side.
+    def xhr_build(request):
+        if request.POST.has_key("project_id"):
+            pid = request.POST['project_id']
+            return xhr_projectbuild(request, pid)
+        else:
+            raise BadParameterException("invalid project id")
 
     def xhr_projectbuild(request, pid):
         try:
             if request.method != "POST":
                 raise BadParameterException("invalid method")
+			request.session['project_id'] = pid
             prj = Project.objects.get(id = pid)
 
-            if prj.projecttarget_set.count() == 0:
-                raise BadParameterException("no targets selected")
 
-            br = prj.schedule_build()
-            return HttpResponse(json.dumps({"error":"ok",
-                "brtarget" : map(lambda x: x.target, br.brtarget_set.all()),
-                "machine" : br.brvariable_set.get(name="MACHINE").value,
+            if 'buildCancel' in request.POST:
+                for i in request.POST['buildCancel'].strip().split(" "):
+                    try:
+                        br = BuildRequest.objects.select_for_update().get(project = prj, pk = i, state__lte = BuildRequest.REQ_QUEUED)
+                        br.state = BuildRequest.REQ_DELETED
+                        br.save()
+                    except BuildRequest.DoesNotExist:
+                        pass
 
-            }), content_type = "application/json")
-        except Exception as e:
-            return HttpResponse(json.dumps({"error":str(e) + "\n" + traceback.format_exc()}), content_type = "application/json")
+            if 'buildDelete' in request.POST:
+                for i in request.POST['buildDelete'].strip().split(" "):
+                    try:
+                        br = BuildRequest.objects.select_for_update().get(project = prj, pk = i, state__lte = BuildRequest.REQ_DELETED).delete()
+                    except BuildRequest.DoesNotExist:
+                        pass
 
-    def xhr_projectedit(request, pid):
-        try:
-            prj = Project.objects.get(id = pid)
-            # add targets
-            if 'targetAdd' in request.POST:
-                for t in request.POST['targetAdd'].strip().split(" "):
+            if 'targets' in request.POST:
+                ProjectTarget.objects.filter(project = prj).delete()
+                s = str(request.POST['targets'])
+                for t in s.translate(None, ";%|\"").split(" "):
                     if ":" in t:
                         target, task = t.split(":")
                     else:
                         target = t
                         task = ""
+                    ProjectTarget.objects.create(project = prj, target = target, task = task)
 
-                    pt, created = ProjectTarget.objects.get_or_create(project = prj, target = target, task = task)
-            # remove targets
-            if 'targetDel' in request.POST:
-                for t in request.POST['targetDel'].strip().split(" "):
-                    pt = ProjectTarget.objects.get(pk = int(t)).delete()
+                br = prj.schedule_build()
 
+            return HttpResponse(jsonfilter({"error":"ok",
+                "builds" : _project_recent_build_list(prj),
+            }), content_type = "application/json")
+        except Exception as e:
+            return HttpResponse(jsonfilter({"error":str(e) + "\n" + traceback.format_exc()}), content_type = "application/json")
+
+    # This is a wraper for xhr_projectedit which allows for a project id
+    # which only becomes known client side
+    def xhr_projectinfo(request):
+        if request.POST.has_key("project_id") == False:
+            raise BadParameterException("invalid project id")
+
+        return xhr_projectedit(request, request.POST['project_id'])
+
+    def xhr_projectedit(request, pid):
+        try:
+            prj = Project.objects.get(id = pid)
             # add layers
+            if 'layerAdd' in request.POST:
+                for lc in Layer_Version.objects.filter(pk__in=request.POST['layerAdd'].split(",")):
+                    ProjectLayer.objects.get_or_create(project = prj, layercommit = lc)
 
             # remove layers
+            if 'layerDel' in request.POST:
+                for t in request.POST['layerDel'].strip().split(" "):
+                    pt = ProjectLayer.objects.filter(project = prj, layercommit_id = int(t)).delete()
+
+            if 'projectName' in request.POST:
+                prj.name = request.POST['projectName']
+                prj.save();
+
+            if 'projectVersion' in request.POST:
+                prj.release = Release.objects.get(pk = request.POST['projectVersion'])
+                # we need to change the bitbake version
+                prj.bitbake_version = prj.release.bitbake_version
+                prj.save()
+                # we need to change the layers
+                for i in prj.projectlayer_set.all():
+                    # find and add a similarly-named layer on the new branch
+                    try:
+                        lv = prj.compatible_layerversions(layer_name = i.layercommit.layer.name)[0]
+                        ProjectLayer.objects.get_or_create(project = prj, layercommit = lv)
+                    except IndexError:
+                        pass
+                    finally:
+                        # get rid of the old entry
+                        i.delete()
+
+            if 'machineName' in request.POST:
+                machinevar = prj.projectvariable_set.get(name="MACHINE")
+                machinevar.value=request.POST['machineName']
+                machinevar.save()
 
             # return all project settings
-            return HttpResponse(json.dumps( {
+            return HttpResponse(jsonfilter( {
                 "error": "ok",
-                "layers": map(lambda x: (x.layercommit.layer.name, x.layercommit.layer.layer_index_url), prj.projectlayer_set.all()),
-                "targets" : map(lambda x: {"target" : x.target, "task" : x.task, "pk": x.pk}, prj.projecttarget_set.all()),
+                "layers" :  map(lambda x: {"id": x.layercommit.pk, "orderid" : x.pk, "name" : x.layercommit.layer.name, "giturl" : x.layercommit.layer.vcs_url, "url": x.layercommit.layer.layer_index_url, "layerdetailurl": reverse("layerdetails", args=(x.layercommit.layer.pk,)), "branch" : { "name" : x.layercommit.up_branch.name, "layersource" : x.layercommit.up_branch.layer_source.name}}, prj.projectlayer_set.all().order_by("id")),
+                "builds" : _project_recent_build_list(prj),
                 "variables": map(lambda x: (x.name, x.value), prj.projectvariable_set.all()),
+                "machine": {"name": prj.projectvariable_set.get(name="MACHINE").value},
+                "prj": {"name": prj.name, "release": { "id": prj.release.pk, "name": prj.release.name, "desc": prj.release.description}},
                 }), content_type = "application/json")
 
         except Exception as e:
-            return HttpResponse(json.dumps({"error":str(e) + "\n" + traceback.format_exc()}), content_type = "application/json")
+            return HttpResponse(jsonfilter({"error":str(e) + "\n" + traceback.format_exc()}), content_type = "application/json")
+
+
+    from django.views.decorators.csrf import csrf_exempt
+    @csrf_exempt
+    def xhr_datatypeahead(request):
+        try:
+            prj = None
+            if request.GET.has_key('project_id'):
+				prj = Project.objects.get(pk = request.GET['project_id'])
+            elif 'project_id' in request.session:
+                prj = Project.objects.get(pk = request.session['project_id'])
+			else:
+				raise Exception("No valid project selected")
+
+
+            def _lv_to_dict(x):
+                return {"id": x.pk, "name": x.layer.name, "tooltip": x.layer.vcs_url+" | "+x.commit,
+                        "detail": "(" + x.layer.vcs_url + (")" if x.up_branch == None else " | "+x.up_branch.name+")"),
+                        "giturl": x.layer.vcs_url, "layerdetailurl" : reverse('layerdetails', args=(x.pk,))}
+
+
+            # returns layers for current project release that are not in the project set, matching the name
+            if request.GET['type'] == "layers":
+                # all layers for the current project
+                queryset_all = prj.compatible_layerversions().filter(layer__name__icontains=request.GET.get('value',''))
+
+                # but not layers with equivalent layers already in project
+                if not request.GET.has_key('include_added'):
+                    queryset_all = queryset_all.exclude(pk__in = [x.id for x in prj.projectlayer_equivalent_set()])[:8]
+
+                # and show only the selected layers for this project
+                final_list = set([x.get_equivalents_wpriority(prj)[0] for x in queryset_all])
+
+                return HttpResponse(jsonfilter( { "error":"ok",  "list" : map( _lv_to_dict, final_list) }), content_type = "application/json")
+
+
+            # returns layer dependencies for a layer, excluding current project layers
+            if request.GET['type'] == "layerdeps":
+                queryset = prj.compatible_layerversions().exclude(pk__in = [x.id for x in prj.projectlayer_equivalent_set()]).filter(
+                    layer__name__in = [ x.depends_on.layer.name for x in LayerVersionDependency.objects.filter(layer_version_id = request.GET['value'])])
+
+                final_list = set([x.get_equivalents_wpriority(prj)[0] for x in queryset])
+
+                return HttpResponse(jsonfilter( { "error":"ok", "list" : map( _lv_to_dict, final_list) }), content_type = "application/json")
+
+
+
+            # returns layer versions that would be deleted on the new release__pk
+            if request.GET['type'] == "versionlayers":
+                if not 'project_id' in request.session:
+                    raise Exception("This call cannot makes no sense outside a project context")
+
+                retval = []
+                for i in prj.projectlayer_set.all():
+                    lv = prj.compatible_layerversions(release = Release.objects.get(pk=request.GET['value'])).filter(layer__name = i.layercommit.layer.name)
+                    # there is no layer_version with the new release id, and the same name
+                    if lv.count() < 1:
+                        retval.append(i)
+
+                return HttpResponse(jsonfilter( {"error":"ok",
+                    "list" : map( _lv_to_dict,  map(lambda x: x.layercommit, retval ))
+                    }), content_type = "application/json")
+
+
+            # returns layer versions that provide the named targets
+            if request.GET['type'] == "layers4target":
+                # we returnd ata only if the recipe can't be provided by the current project layer set
+                if reduce(lambda x, y: x + y, [x.recipe_layer_version.filter(name="anki").count() for x in prj.projectlayer_equivalent_set()], 0):
+                    final_list = []
+                else:
+                    queryset_all = prj.compatible_layerversions().filter(recipe_layer_version__name = request.GET.get('value', '__none__'))
+
+                    # exclude layers in the project
+                    queryset_all = queryset_all.exclude(pk__in = [x.id for x in prj.projectlayer_equivalent_set()])
+
+                    # and show only the selected layers for this project
+                    final_list = set([x.get_equivalents_wpriority(prj)[0] for x in queryset_all])
+
+                return HttpResponse(jsonfilter( { "error":"ok",  "list" : map( _lv_to_dict, final_list) }), content_type = "application/json")
+
+            # returns targets provided by current project layers
+            if request.GET['type'] == "targets":
+                queryset_all = Recipe.objects.all()
+                layer_equivalent_set = []
+                for i in prj.projectlayer_set.all():
+                    layer_equivalent_set += i.layercommit.get_equivalents_wpriority(prj)
+                queryset_all = queryset_all.filter(layer_version__in =  layer_equivalent_set)
+                return HttpResponse(jsonfilter({ "error":"ok",
+                    "list" : map ( lambda x: {"id": x.pk, "name": x.name, "detail":"[" + x.layer_version.layer.name+ (" | " + x.layer_version.up_branch.name + "]" if x.layer_version.up_branch is not None else "]")},
+                        queryset_all.filter(name__icontains=request.GET.get('value',''))[:8]),
+
+                    }), content_type = "application/json")
+
+            # returns machines provided by the current project layers
+            if request.GET['type'] == "machines":
+                queryset_all = Machine.objects.all()
+                if 'project_id' in request.session:
+                    queryset_all = queryset_all.filter(layer_version__in =  prj.projectlayer_equivalent_set())
+
+                return HttpResponse(jsonfilter({ "error":"ok",
+                    "list" : map ( lambda x: {"id": x.pk, "name": x.name, "detail":"[" + x.layer_version.layer.name+ (" | " + x.layer_version.up_branch.name + "]" if x.layer_version.up_branch is not None else "]")},
+                        queryset_all.filter(name__icontains=request.GET.get('value',''))[:8]),
+
+                    }), content_type = "application/json")
+
+            # returns all projects
+            if request.GET['type'] == "projects":
+                queryset_all = Project.objects.all()
+                ret = { "error": "ok",
+                       "list": map (lambda x: {"id":x.pk, "name": x.name},
+                                    queryset_all.filter(name__icontains=request.GET.get('value',''))[:8])}
+
+                return HttpResponse(jsonfilter(ret), content_type = "application/json")
+
+            raise Exception("Unknown request! " + request.GET.get('type', "No parameter supplied"))
+        except Exception as e:
+            return HttpResponse(jsonfilter({"error":str(e) + "\n" + traceback.format_exc()}), content_type = "application/json")
+
+
+    def xhr_importlayer(request):
+        if (not request.POST.has_key('vcs_url') or
+            not request.POST.has_key('name') or
+            not request.POST.has_key('git_ref') or
+            not request.POST.has_key('project_id')):
+          return HttpResponse(jsonfilter({"error": "Missing parameters; requires vcs_url, name, git_ref and project_id"}), content_type = "application/json")
+
+        layers_added = [];
+
+        # Rudimentary check for any possible html tags
+        if "<" in request.POST:
+          return HttpResponse(jsonfilter({"error": "Invalid character <"}), content_type = "application/json")
+
+        prj = Project.objects.get(pk=request.POST['project_id'])
+
+        # Strip trailing/leading whitespace from all values
+        # put into a new dict because POST one is immutable
+        post_data = dict()
+        for key,val in request.POST.iteritems():
+          post_data[key] = val.strip()
+
+
+        # We need to know what release the current project is so that we
+        # can set the imported layer's up_branch_id
+        prj_branch_name = Release.objects.get(pk=prj.release_id).branch_name
+        up_branch, branch_created = Branch.objects.get_or_create(name=prj_branch_name, layer_source_id=LayerSource.TYPE_IMPORTED)
+
+        layer_source = LayerSource.objects.get(sourcetype=LayerSource.TYPE_IMPORTED)
+        try:
+            layer, layer_created = Layer.objects.get_or_create(name=post_data['name'])
+        except MultipleObjectsReturned:
+            return HttpResponse(jsonfilter({"error": "hint-layer-exists"}), content_type = "application/json")
+
+        if layer:
+            if layer_created:
+                layer.layer_source = layer_source
+                layer.vcs_url = post_data['vcs_url']
+                if post_data.has_key('summary'):
+                    layer.summary = layer.description = post_data['summary']
+
+                layer.up_date = timezone.now()
+                layer.save()
+            else:
+                # We have an existing layer by this name, let's see if the git
+                # url is the same, if it is then we can just create a new layer
+                # version for this layer. Otherwise we need to bail out.
+                if layer.vcs_url != post_data['vcs_url']:
+                    return HttpResponse(jsonfilter({"error": "hint-layer-exists-with-different-url" , "current_url" : layer.vcs_url, "current_id": layer.id }), content_type = "application/json")
+
+
+            layer_version, version_created = Layer_Version.objects.get_or_create(layer_source=layer_source, layer=layer, project=prj, up_branch_id=up_branch.id,branch=post_data['git_ref'],  commit=post_data['git_ref'], dirpath=post_data['dir_path'])
+
+            if layer_version:
+                if not version_created:
+                    return HttpResponse(jsonfilter({"error": "hint-layer-version-exists", "existing_layer_version": layer_version.id }), content_type = "application/json")
+
+                layer_version.up_date = timezone.now()
+                layer_version.save()
+
+                # Add the dependencies specified for this new layer
+                if (post_data.has_key("layer_deps") and
+                    version_created and
+                    len(post_data["layer_deps"]) > 0):
+                    for layer_dep_id in post_data["layer_deps"].split(","):
+
+                        layer_dep_obj = Layer_Version.objects.get(pk=layer_dep_id)
+                        LayerVersionDependency.objects.get_or_create(layer_version=layer_version, depends_on=layer_dep_obj)
+                        # Now add them to the project, we could get an execption
+                        # if the project now contains the exact
+                        # dependency already (like modified on another page)
+                        try:
+                            prj_layer, prj_layer_created = ProjectLayer.objects.get_or_create(layercommit=layer_dep_obj, project=prj)
+                        except:
+                            continue
+
+                        if prj_layer_created:
+                            layers_added.append({'id': layer_dep_obj.id, 'name': Layer.objects.get(id=layer_dep_obj.layer_id).name})
+
+
+                # If an old layer version exists in our project then remove it
+                for prj_layers in ProjectLayer.objects.filter(project=prj):
+                    dup_layer_v = Layer_Version.objects.filter(id=prj_layers.layercommit_id, layer_id=layer.id)
+                    if len(dup_layer_v) >0 :
+                        prj_layers.delete()
+
+                # finally add the imported layer (version id) to the project
+                ProjectLayer.objects.create(layercommit=layer_version, project=prj,optional=1)
+
+            else:
+                # We didn't create a layer version so back out now and clean up.
+                if layer_created:
+                    layer.delete()
+
+                return HttpResponse(jsonfilter({"error": "Uncaught error: Could not create layer version"}), content_type = "application/json")
+
+
+        return HttpResponse(jsonfilter({"error": "ok", "imported_layer" : { "name" : layer.name, "id": layer_version.id },  "deps_added": layers_added }), content_type = "application/json")
+
+
 
     def importlayer(request):
         template = "importlayer.html"
@@ -1962,12 +2344,17 @@ if toastermain.settings.MANAGED:
         }
         return render(request, template, context)
 
+
     def layers(request):
+        if not 'project_id' in request.session:
+            raise Exception("invalid page: cannot show page without a project")
+
         template = "layers.html"
         # define here what parameters the view needs in the GET portion in order to
         # be able to display something.  'count' and 'page' are mandatory for all views
         # that use paginators.
-        mandatory_parameters = { 'count': 10,  'page' : 1, 'orderby' : 'layer__name:+' };
+        (pagesize, orderby) = _get_parameters_values(request, 100, 'layer__name:+')
+        mandatory_parameters = { 'count': pagesize,  'page' : 1, 'orderby' : orderby };
         retval = _verify_parameters( request.GET, mandatory_parameters )
         if retval:
             return _redirect_parameters( 'layers', request.GET, mandatory_parameters)
@@ -1976,22 +2363,23 @@ if toastermain.settings.MANAGED:
         # for that object type. copypasta for all needed table searches
         (filter_string, search_term, ordering_string) = _search_tuple(request, Layer_Version)
 
-        queryset_all = Layer_Version.objects.all()
-        if 'project_id' in request.session:
-            queryset_all = queryset_all.filter(up_branch__in = Branch.objects.filter(name = Project.objects.get(pk = request.session['project_id']).release.name))
+        prj = Project.objects.get(pk = request.session['project_id'])
 
-        queryset_with_search = _get_queryset(Layer_Version, queryset_all, None, search_term, ordering_string, '-layer__name')
-        queryset = _get_queryset(Layer_Version, queryset_all, filter_string, search_term, ordering_string, '-layer__name')
+        queryset_all = prj.compatible_layerversions()
+
+        queryset_all = _get_queryset(Layer_Version, queryset_all, filter_string, search_term, ordering_string, '-layer__name')
+
 
         # retrieve the objects that will be displayed in the table; layers a paginator and gets a page range to display
-        layer_info = _build_page_range(Paginator(queryset, request.GET.get('count', 10)),request.GET.get('page', 1))
+        layer_info = _build_page_range(Paginator(queryset_all, request.GET.get('count', 10)),request.GET.get('page', 1))
 
 
         context = {
+            'projectlayerset' : jsonfilter(map(lambda x: x.layercommit.id, prj.projectlayer_set.all())),
             'objects' : layer_info,
             'objectname' : "layers",
             'default_orderby' : 'layer__name:+',
-            'total_count': queryset_with_search.count(),
+            'total_count': queryset_all.count(),
 
             'tablecols' : [
                 {   'name': 'Layer',
@@ -2010,7 +2398,7 @@ if toastermain.settings.MANAGED:
                     'filter': {
                         'class': 'layer',
                         'label': 'Show:',
-                        'options': map(lambda x: (x.name, 'layer_source__pk:' + str(x.id), queryset_with_search.filter(layer_source__pk = x.id).count() ), LayerSource.objects.all()),
+                        'options': map(lambda x: (x.name + " layers", 'layer_source__pk:' + str(x.id), queryset_all.filter(layer_source__pk = x.id).count() ), LayerSource.objects.all()),
                     }
                 },
                 {   'name': 'Git repository URL',
@@ -2034,8 +2422,16 @@ if toastermain.settings.MANAGED:
                 {   'name': 'Add | Delete',
                     'dclass': 'span2',
                     'qhelp': "Add or delete layers to / from your project ",
-                },
+                    'filter': {
+                        'class': 'add-del-layers',
+                        'label': 'Show:',
+                        'options': [
+              ('Layers added to this project', "projectlayer__project:" + str(prj.id), queryset_all.filter(projectlayer__project = prj.id).count()),
+              ('Layers not added to this project', "projectlayer__project:NOT" + str(prj.id), queryset_all.exclude(projectlayer__project = prj.id).count()),
+                                   ]
 
+                    }
+                },
             ]
         }
 
@@ -2049,31 +2445,30 @@ if toastermain.settings.MANAGED:
         return render(request, template, context)
 
     def targets(request):
-        template = "targets.html"
-        # define here what parameters the view needs in the GET portion in order to
-        # be able to display something.  'count' and 'page' are mandatory for all views
-        # that use paginators.
-        mandatory_parameters = { 'count': 10,  'page' : 1, 'orderby' : 'name:+' };
+        if not 'project_id' in request.session:
+            raise Exception("invalid page: cannot show page without a project")
+
+        template = 'targets.html'
+        (pagesize, orderby) = _get_parameters_values(request, 100, 'name:+')
+        mandatory_parameters = { 'count': pagesize,  'page' : 1, 'orderby' : orderby }
         retval = _verify_parameters( request.GET, mandatory_parameters )
         if retval:
             return _redirect_parameters( 'targets', request.GET, mandatory_parameters)
-
-        # boilerplate code that takes a request for an object type and returns a queryset
-        # for that object type. copypasta for all needed table searches
         (filter_string, search_term, ordering_string) = _search_tuple(request, Recipe)
 
-        queryset_all = Recipe.objects.all()
-        if 'project_id' in request.session:
-            queryset_all = queryset_all.filter(Q(layer_version__up_branch__in = Branch.objects.filter(name = Project.objects.get(pk=request.session['project_id']).release.name)) | Q(layer_version__build__in = Project.objects.get(pk = request.session['project_id']).build_set.all()))
+        prj = Project.objects.get(pk = request.session['project_id'])
+        queryset_all = Recipe.objects.filter(Q(layer_version__up_branch__name= prj.release.name) | Q(layer_version__build__in = prj.build_set.all()))
 
         queryset_with_search = _get_queryset(Recipe, queryset_all, None, search_term, ordering_string, '-name')
-        queryset = _get_queryset(Recipe, queryset_all, filter_string, search_term, ordering_string, '-name')
+
+        queryset_with_search.prefetch_related("layer_source")
 
         # retrieve the objects that will be displayed in the table; targets a paginator and gets a page range to display
-        target_info = _build_page_range(Paginator(queryset, request.GET.get('count', 10)),request.GET.get('page', 1))
+        target_info = _build_page_range(Paginator(queryset_with_search, request.GET.get('count', 10)),request.GET.get('page', 1))
 
 
         context = {
+            'projectlayerset' : jsonfilter(map(lambda x: x.layercommit.id, prj.projectlayer_set.all())),
             'objects' : target_info,
             'objectname' : "targets",
             'default_orderby' : 'name:+',
@@ -2099,13 +2494,19 @@ if toastermain.settings.MANAGED:
                 {   'name': 'Section',
                     'clclass': 'target-section',
                     'hidden': 1,
+                    'orderfield': _get_toggle_order(request, "section"),
+                    'ordericon': _get_toggle_order_icon(request, "section"),
                 },
                 {   'name': 'License',
                     'clclass': 'license',
                     'hidden': 1,
+                    'orderfield': _get_toggle_order(request, "license"),
+                    'ordericon': _get_toggle_order_icon(request, "license"),
                 },
                 {   'name': 'Layer',
                     'clclass': 'layer',
+                    'orderfield': _get_toggle_order(request, "layer_version__layer__name"),
+                    'ordericon': _get_toggle_order_icon(request, "layer_version__layer__name"),
                 },
                 {   'name': 'Layer source',
                     'clclass': 'source',
@@ -2115,20 +2516,32 @@ if toastermain.settings.MANAGED:
                     'filter': {
                         'class': 'target',
                         'label': 'Show:',
-                        'options': map(lambda x: (x.name, 'layer_source__pk:' + str(x.id), queryset_with_search.filter(layer_source__pk = x.id).count() ), LayerSource.objects.all()),
+                        'options': map(lambda x: ("Targets provided by " + x.name + " layers", 'layer_source__pk:' + str(x.id), queryset_with_search.filter(layer_source__pk = x.id).count() ), LayerSource.objects.all()),
                     }
                 },
                 {   'name': 'Branch, tag or commit',
                     'clclass': 'branch',
                     'hidden': 1,
                 },
+            ]
+        }
+
+        if 'project_id' in request.session:
+            context['tablecols'] += [
                 {   'name': 'Build',
                     'dclass': 'span2',
                     'qhelp': "Add or delete targets to / from your project ",
-                },
+                    'filter': {
+                        'class': 'add-layer',
+                        'label': 'Show:',
+                        'options': [
+              ('Targets provided by layers added to this project', "layer_version__projectlayer__project:" + str(prj.id), queryset_with_search.filter(layer_version__projectlayer__project = prj.id).count()),
+              ('Targets provided by layers not added to this project', "layer_version__projectlayer__project:NOT" + str(prj.id), queryset_with_search.exclude(layer_version__projectlayer__project = prj.id).count()),
+                                   ]
 
-            ]
-        }
+                    }
+                }, ]
+
 
         return render(request, template, context)
 
@@ -2148,7 +2561,7 @@ if toastermain.settings.MANAGED:
 
         queryset_all = Machine.objects.all()
 #        if 'project_id' in request.session:
-#            queryset_all = queryset_all.filter(Q(layer_version__up_branch__in = Branch.objects.filter(name = Project.objects.get(request.session['project_id']).release.name)) | Q(layer_version__build__in = Project.objects.get(request.session['project_id']).build_set.all()))
+#            queryset_all = queryset_all.filter(Q(layer_version__up_branch__name = Project.objects.get(request.session['project_id']).release.branch_name) | Q(layer_version__build__in = Project.objects.get(request.session['project_id']).build_set.all()))
 
         queryset_with_search = _get_queryset(Machine, queryset_all, None, search_term, ordering_string, '-name')
         queryset = _get_queryset(Machine, queryset_all, filter_string, search_term, ordering_string, '-name')
@@ -2222,7 +2635,7 @@ if toastermain.settings.MANAGED:
         # boilerplate code that takes a request for an object type and returns a queryset
         # for that object type. copypasta for all needed table searches
         (filter_string, search_term, ordering_string) = _search_tuple(request, Build)
-        queryset_all = Build.objects.all.exclude(outcome = Build.IN_PROGRESS)
+        queryset_all = Build.objects.all().exclude(outcome = Build.IN_PROGRESS)
         queryset_with_search = _get_queryset(Build, queryset_all, None, search_term, ordering_string, '-completed_on')
         queryset = _get_queryset(Build, queryset_all, filter_string, search_term, ordering_string, '-completed_on')
 
@@ -2370,12 +2783,140 @@ if toastermain.settings.MANAGED:
                 }
 
         return render(request, template, context)
+
+
+    def _file_name_for_artifact(b, artifact_type, artifact_id):
+        file_name = None
+        # Target_Image_File file_name
+        if artifact_type == "imagefile":
+            file_name = Target_Image_File.objects.get(target__build = b, pk = artifact_id).file_name
+
+        elif artifact_type == "cookerlog":
+            file_name = b.cooker_log_path
+
+        elif artifact_type == "buildartifact":
+            file_name = BuildArtifact.objects.get(build = b, pk = artifact_id).file_name
+
+        elif artifact_type ==  "licensemanifest":
+            file_name = Target.objects.get(build = b, pk = artifact_id).license_manifest_path
+
+        elif artifact_type == "tasklogfile":
+            file_name = Task.objects.get(build = b, pk = artifact_id).logfile
+
+        elif artifact_type == "logmessagefile":
+            file_name = LogMessage.objects.get(build = b, pk = artifact_id).pathname
+        else:
+            raise Exception("FIXME: artifact type %s not implemented" % (artifact_type))
+
+        return file_name
+
+
+    def build_artifact(request, build_id, artifact_type, artifact_id):
+        b = Build.objects.get(pk=build_id)
+        if b.buildrequest is None or b.buildrequest.environment is None:
+            raise Exception("Artifact not available for download (missing build request or build environment)")
+
+        file_name = _file_name_for_artifact(b, artifact_type, artifact_id)
+        fsock = None
+        content_type='application/force-download'
+
+        if file_name is None:
+            raise Exception("Could not handle artifact %s id %s" % (artifact_type, artifact_id))
+        else:
+            content_type = b.buildrequest.environment.get_artifact_type(file_name)
+            fsock = b.buildrequest.environment.get_artifact(file_name)
+            file_name = os.path.basename(file_name) # we assume that the build environment system has the same path conventions as host
+
+        response = HttpResponse(fsock, content_type = content_type)
+
+        # returns a file from the environment
+        response['Content-Disposition'] = 'attachment; filename=' + file_name
+        return response
+
+
+
+    def projects(request):
+        template="projects.html"
+
+        (pagesize, orderby) = _get_parameters_values(request, 10, 'updated:+')
+        mandatory_parameters = { 'count': pagesize,  'page' : 1, 'orderby' : orderby }
+        retval = _verify_parameters( request.GET, mandatory_parameters )
+        if retval:
+            return _redirect_parameters( 'all-projects', request.GET, mandatory_parameters)
+
+        queryset_all = Project.objects.all()
+
+        # boilerplate code that takes a request for an object type and returns a queryset
+        # for that object type. copypasta for all needed table searches
+        (filter_string, search_term, ordering_string) = _search_tuple(request, Project)
+        queryset_with_search = _get_queryset(Project, queryset_all, None, search_term, ordering_string, '-updated')
+        queryset = _get_queryset(Project, queryset_all, filter_string, search_term, ordering_string, '-updated')
+
+        # retrieve the objects that will be displayed in the table; projects a paginator and gets a page range to display
+        project_info = _build_page_range(Paginator(queryset, pagesize), request.GET.get('page', 1))
+
+        # build view-specific information; this is rendered specifically in the builds page, at the top of the page (i.e. Recent builds)
+        build_mru = Build.objects.order_by("-started_on")[:3]
+
+
+
+        context = {
+                'mru' : build_mru,
+
+                'objects' : project_info,
+                'objectname' : "projects",
+                'default_orderby' : 'id:-',
+                'search_term' : search_term,
+                'total_count' : queryset_with_search.count(),
+                'tablecols': [
+                    {'name': 'Project',
+                    'orderfield': _get_toggle_order(request, "name"),
+                    'ordericon':_get_toggle_order_icon(request, "name"),
+                    'orderkey' : 'name',
+                    },
+                    {'name': 'Release',
+                    'qhelp' : "The version of the build system used by the project",
+                    'orderfield': _get_toggle_order(request, "release__name"),
+                    'ordericon':_get_toggle_order_icon(request, "release__name"),
+                    'orderkey' : 'release__name',
+                    },
+                    {'name': 'Machine',
+                    'qhelp': "The hardware currently selected for the project",
+                    },
+                    {'name': 'Number of builds',
+                    'qhelp': "How many builds have been run for the project",
+                    },
+                    {'name': 'Last outcome', 'clclass': 'loutcome',
+                    'qhelp': "Tells you if the last project build completed successfully or failed",
+                    },
+                    {'name': 'Last target', 'clclass': 'ltarget',
+                    'qhelp': "The last project build target(s): one or more recipes or image recipes",
+                    },
+                    {'name': 'Last errors', 'clclass': 'lerrors',
+                    'qhelp': "How many errors were encountered during the last project build (if any)",
+                    },
+                    {'name': 'Last warnings', 'clclass': 'lwarnings',
+                    'qhelp': "How many warnigns were encountered during the last project build (if any)",
+                    },
+                    {'name': 'Last image files', 'clclass': 'limagefiles', 'hidden': 1,
+                    'qhelp': "The root file system types produced by the last project build",
+                    },
+                    {'name': 'Last updated', 'clclass': 'updated',
+                    'orderfield': _get_toggle_order(request, "updated"),
+                    'ordericon':_get_toggle_order_icon(request, "updated"),
+                    'orderkey' : 'updated',
+                    }
+                    ]
+            }
+        return render(request, template, context)
+
 else:
     # these are pages that are NOT available in interactive mode
     def managedcontextprocessor(request):
         return {
             "projects": [],
-            "MANAGED" : toastermain.settings.MANAGED
+            "MANAGED" : toastermain.settings.MANAGED,
+            "DEBUG" : toastermain.settings.DEBUG
         }
 
     def newproject(request):
@@ -2387,7 +2928,16 @@ else:
     def xhr_projectbuild(request, pid):
         raise Exception("page not available in interactive mode")
 
+    def xhr_build(request, pid):
+        raise Exception("page not available in interactive mode")
+
+    def xhr_projectinfo(request, pid):
+        raise Exception("page not available in interactive mode")
+
     def xhr_projectedit(request, pid):
+        raise Exception("page not available in interactive mode")
+
+    def xhr_datatypeahead(request):
         raise Exception("page not available in interactive mode")
 
     def importlayer(request):
@@ -2412,4 +2962,13 @@ else:
         raise Exception("page not available in interactive mode")
 
     def projectbuilds(request):
+        raise Exception("page not available in interactive mode")
+
+    def build_artifact(request, build_id, artifact_type, artifact_id):
+        raise Exception("page not available in interactive mode")
+
+    def projects(request):
+        raise Exception("page not available in interactive mode")
+
+    def xhr_importlayer(request):
         raise Exception("page not available in interactive mode")

@@ -127,15 +127,23 @@ class BootimgPcbiosPlugin(SourcePlugin):
         'prepares' the partition to be incorporated into the image.
         In this case, prepare content for legacy bios boot partition.
         """
-        if not bootimg_dir:
+        def _has_syslinux(dir):
+            if dir:
+                syslinux = "%s/syslinux" % dir
+                if os.path.exists(syslinux):
+                    return True
+            return False
+
+        if not _has_syslinux(bootimg_dir):
             bootimg_dir = get_bitbake_var("STAGING_DATADIR")
             if not bootimg_dir:
                 msger.error("Couldn't find STAGING_DATADIR, exiting\n")
+            if not _has_syslinux(bootimg_dir):
+                msger.error("Please build syslinux first\n")
             # just so the result notes display it
             cr.set_bootimg_dir(bootimg_dir)
 
         staging_kernel_dir = kernel_dir
-        staging_data_dir = bootimg_dir
 
         hdddir = "%s/hdd/boot" % cr_workdir
 
@@ -144,7 +152,7 @@ class BootimgPcbiosPlugin(SourcePlugin):
         exec_cmd(install_cmd)
 
         install_cmd = "install -m 444 %s/syslinux/ldlinux.sys %s/ldlinux.sys" \
-            % (staging_data_dir, hdddir)
+            % (bootimg_dir, hdddir)
         exec_cmd(install_cmd)
 
         du_cmd = "du -bks %s" % hdddir

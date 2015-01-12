@@ -216,11 +216,25 @@ python base_eventhandler() {
 
 }
 
+CONFIGURESTAMPFILE = "${WORKDIR}/configure.sstate"
+CLEANBROKEN = "0"
+
 addtask configure after do_patch
 do_configure[dirs] = "${S} ${B}"
 do_configure[deptask] = "do_populate_sysroot"
 base_do_configure() {
-	:
+	if [ -n "${CONFIGURESTAMPFILE}" -a -e "${CONFIGURESTAMPFILE}" ]; then
+		if [ "`cat ${CONFIGURESTAMPFILE}`" != "${BB_TASKHASH}" ]; then
+			cd ${B}
+			if [ "${CLEANBROKEN}" != "1" -a \( -e Makefile -o -e makefile -o -e GNUmakefile \) ]; then
+				oe_runmake clean
+			fi
+			find ${B} -name \*.la -delete
+		fi
+	fi
+	if [ -n "${CONFIGURESTAMPFILE}" ]; then
+		echo ${BB_TASKHASH} > ${CONFIGURESTAMPFILE}
+	fi
 }
 
 addtask compile after do_configure
@@ -333,8 +347,6 @@ python () {
         extrardeps = []
         extraconf = []
         for flag, flagval in sorted(pkgconfigflags.items()):
-            if flag == "defaultval":
-                continue
             items = flagval.split(",")
             num = len(items)
             if num > 4:
@@ -362,7 +374,7 @@ python () {
     # obsolete.  Return a warning to the user.
     princ = d.getVar('PRINC', True)
     if princ and princ != "0":
-        bb.warn("Use of PRINC %s was detected in the recipe %s (or one of its .bbappends)\nUse of PRINC is deprecated.  The PR server should be used to automatically increment the PR.  See: https://wiki.yoctoproject.org/wiki/PR_Service." % (princ, d.getVar("FILE", True)))
+        bb.error("Use of PRINC %s was detected in the recipe %s (or one of its .bbappends)\nUse of PRINC is deprecated.  The PR server should be used to automatically increment the PR.  See: https://wiki.yoctoproject.org/wiki/PR_Service." % (princ, d.getVar("FILE", True)))
         pr = d.getVar('PR', True)
         pr_prefix = re.search("\D+",pr)
         prval = re.search("\d+",pr)
@@ -378,6 +390,7 @@ python () {
         bb.fatal('This recipe does not have the LICENSE field set (%s)' % pn)
 
     if bb.data.inherits_class('license', d):
+        check_license_format(d)
         unmatched_license_flag = check_license_flags(d)
         if unmatched_license_flag:
             bb.debug(1, "Skipping %s because it has a restricted license not"
@@ -431,7 +444,7 @@ python () {
                 check_license = False
 
         if check_license and bad_licenses:
-            bad_licenses = map(lambda l: canonical_license(d, l), bad_licenses)
+            bad_licenses = expand_wildcard_licenses(d, bad_licenses)
 
             whitelist = []
             for lic in bad_licenses:

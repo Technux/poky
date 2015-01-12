@@ -102,10 +102,22 @@
     </para>
 
     <para>
+        By default, the <filename>autotools</filename> class
+        uses out-of-tree builds
+        (<link linkend='var-B'><filename>B</filename></link> <filename>!=</filename>
+        <link linkend='var-S'><filename>S</filename></link>).
+        If the software being built by a recipe does not support
+        using out-of-tree builds, you should have the recipe inherit the
+        <link linkend='ref-classes-autotools-brokensep'><filename>autotools-brokensep</filename></link>
+        class.
+    </para>
+
+    <para>
         It's useful to have some idea of how the tasks defined by this class work
         and what they do behind the scenes.
         <itemizedlist>
-            <listitem><para><link linkend='ref-tasks-configure'><filename>do_configure</filename></link> &dash; Regenerates the
+            <listitem><para><link linkend='ref-tasks-configure'><filename>do_configure</filename></link> &dash;
+                Regenerates the
                 configure script (using <filename>autoreconf</filename>) and then launches it
                 with a standard set of arguments used during cross-compilation.
                 You can pass additional parameters to <filename>configure</filename> through the
@@ -123,17 +135,6 @@
                 </para></listitem>
         </itemizedlist>
     </para>
-
-    <note>
-        It is planned for future Yocto Project releases that by default, the
-        <filename>autotools</filename> class supports out-of-tree builds
-        (<link linkend='var-B'><filename>B</filename></link> !=
-        <link linkend='var-S'><filename>S</filename></link>).
-        If your recipes do not support out-of-tree builds, you should
-        have them inherit the
-        <link linkend='ref-classes-autotools-brokensep'><filename>autotools-brokensep</filename></link>
-        class.
-    </note>
 </section>
 
 <section id='ref-classes-autotools-brokensep'>
@@ -228,6 +229,21 @@
         See the
         <link linkend='var-BINCONFIG_GLOB'><filename>BINCONFIG_GLOB</filename></link>
         variable for more information.
+    </para>
+</section>
+
+<section id='ref-classes-binconfig-disabled'>
+    <title><filename>binconfig-disabled.bbclass</filename></title>
+
+    <para>
+        An alternative version of the
+        <link linkend='ref-classes-binconfig'><filename>binconfig</filename></link>
+        class, which disables binary configuration scripts by making them
+        return an error in favor of using <filename>pkg-config</filename>
+        to query the information.
+        The scripts to be disabled should be specified using the
+        <link linkend='var-BINCONFIG'><filename>BINCONFIG</filename></link>
+        variable within the recipe inheriting the class.
     </para>
 </section>
 
@@ -366,6 +382,18 @@
     </para>
 </section>
 
+<section id='ref-classes-buildstats-summary'>
+    <title><filename>buildstats-summary.bbclass</filename></title>
+
+    <para>
+        When inherited globally, prints statistics at the end of the build
+        on sstate re-use.
+        In order to function, this class requires the
+        <link linkend='ref-classes-buildstats'><filename>buildstats</filename></link>
+        class be enabled.
+    </para>
+</section>
+
 <section id='ref-classes-ccache'>
     <title><filename>ccache.bbclass</filename></title>
 
@@ -433,6 +461,19 @@
     </para>
 </section>
 
+<section id='ref-classes-compress_doc'>
+    <title><filename>compress_doc.bbclass</filename></title>
+
+    <para>
+        Enables compression for man pages and info pages.
+        This class is intended to be inherited globally.
+        The default compression mechanism is gz (gzip) but you can
+        select an alternative mechanism by setting the
+        <link linkend='var-DOC_COMPRESS'><filename>DOC_COMPRESS</filename></link>
+        variable.
+    </para>
+</section>
+
 <section id='ref-classes-copyleft_compliance'>
     <title><filename>copyleft_compliance.bbclass</filename></title>
 
@@ -444,6 +485,20 @@
         deprecated in favor of the
         <link linkend='ref-classes-archiver'><filename>archiver</filename></link>
         class.
+    </para>
+</section>
+
+<section id='ref-classes-copyleft_filter'>
+    <title><filename>copyleft_filter.bbclass</filename></title>
+
+    <para>
+        A class used by the
+        <link linkend='ref-classes-archiver'><filename>archiver</filename></link>
+        and
+        <link linkend='ref-classes-copyleft_compliance'><filename>copyleft_compliance</filename></link>
+        classes for filtering licenses.
+        The <filename>copyleft_filter</filename> class is an internal class
+        and is not intended to be used directly.
     </para>
 </section>
 
@@ -982,6 +1037,36 @@
     </para>
 </section>
 
+<section id='ref-classes-gummiboot'>
+    <title><filename>gummiboot.bbclass</filename></title>
+
+    <para>
+        The <filename>gummiboot</filename> class provides functions specific
+        to the gummiboot bootloader for building bootable images.
+        This is an internal class and is not intended to be
+        used directly.
+        Set the
+        <link linkend='var-EFI_PROVIDER'><filename>EFI_PROVIDER</filename></link>
+        variable to "gummiboot" to use this class.
+    </para>
+
+    <para>
+        For information on more variables used and supported in this class,
+        see the
+        <link linkend='var-GUMMIBOOT_CFG'><filename>GUMMIBOOT_CFG</filename></link>,
+        <link linkend='var-GUMMIBOOT_ENTRIES'><filename>GUMMIBOOT_ENTRIES</filename></link>,
+        and
+        <link linkend='var-GUMMIBOOT_TIMEOUT'><filename>GUMMIBOOT_TIMEOUT</filename></link>
+        variables.
+    </para>
+
+    <para>
+        You can also see the
+        <ulink url='http://freedesktop.org/wiki/Software/gummiboot/'>Gummiboot documentation</ulink>
+        for more information.
+    </para>
+</section>
+
 <section id='ref-classes-gzipnative'>
     <title><filename>gzipnative.bbclass</filename></title>
 
@@ -1335,6 +1420,35 @@
                 Currently, this test triggers too many false positives and
                 thus is not normally enabled.
                 </para></listitem>
+            <listitem><para><emphasis><filename>build-deps:</filename></emphasis>
+                Determines if a build-time dependency that is specified through
+                <link linkend='var-DEPENDS'><filename>DEPENDS</filename></link>,
+                explicit
+                <link linkend='var-RDEPENDS'><filename>RDEPENDS</filename></link>,
+                or task-level dependencies exists to match any runtime
+                dependency.
+                This determination is particularly useful to discover where
+                runtime dependencies are detected and added during packaging.
+                If no explicit dependency has been specified within the
+                metadata, at the packaging stage it is too late to ensure that
+                the dependency is built, and thus you can end up with an
+                error when the package is installed into the image during the
+                <link linkend='ref-tasks-rootfs'><filename>do_rootfs</filename></link>
+                task because the auto-detected dependency was not satisfied.
+                An example of this would be where the
+                <link linkend='ref-classes-update-rc.d'><filename>update-rc.d</filename></link>
+                class automatically adds a dependency on the
+                <filename>initscripts-functions</filename> package to packages
+                that install an initscript that refers to
+                <filename>/etc/init.d/functions</filename>.
+                The recipe should really have an explicit
+                <filename>RDEPENDS</filename> for the package in question on
+                <filename>initscripts-functions</filename> so that the
+                OpenEmbedded build system is able to ensure that the
+                <filename>initscripts</filename> recipe is actually built and
+                thus the <filename>initscripts-functions</filename> package is
+                made available.
+                </para></listitem>
             <listitem><para><emphasis><filename>compile-host-path:</filename></emphasis>
                 Checks the
                 <link linkend='ref-tasks-compile'><filename>do_compile</filename></link>
@@ -1385,6 +1499,25 @@
                 them.
                 Some very rare cases do exist for dynamically loaded modules where
                 these symlinks are needed instead in the main package.
+                </para></listitem>
+            <listitem><para><emphasis><filename>file-rdeps:</filename></emphasis>
+                Checks that file-level dependencies identified by the
+                OpenEmbedded build system at packaging time are satisfied.
+                For example, a shell script might start with the line
+                <filename>#!/bin/bash</filename>.
+                This line would translate to a file dependency on
+                <filename>/bin/bash</filename>.
+                Of the three package managers that the OpenEmbedded build
+                system supports, only RPM directly handles file-level
+                dependencies, resolving them automatically to packages
+                providing the files.
+                However, the lack of that functionality in the other two
+                package managers does not mean the dependencies do not still
+                need resolving.
+                This QA check attempts to ensure that explicitly declared
+                <link linkend='var-RDEPENDS'><filename>RDEPENDS</filename></link>
+                exist to handle any file-level dependency detected in
+                packaged files.
                 </para></listitem>
             <listitem><para><emphasis><filename>files-invalid:</filename></emphasis>
                 Checks for
@@ -1898,7 +2031,7 @@
         You can create a recipe that builds tools that run natively on the
         host a couple different ways:
         <itemizedlist>
-            <listitem><para>Create a <filename>myrecipe-native.bb</filename>
+            <listitem><para>Create a <replaceable>myrecipe</replaceable><filename>-native.bb</filename>
                 that inherits the <filename>native</filename> class.
                 If you use this method, you must order the inherit statement
                 in the recipe after all other inherit statements so that the
@@ -1939,7 +2072,7 @@
         You can create a recipe that builds tools that run on the SDK machine
         a couple different ways:
         <itemizedlist>
-            <listitem><para>Create a <filename>myrecipe-nativesdk.bb</filename>
+            <listitem><para>Create a <replaceable>myrecipe</replaceable><filename>-nativesdk.bb</filename>
                 recipe that inherits the <filename>nativesdk</filename> class.
                 If you use this method, you must order the inherit statement
                 in the recipe after all other inherit statements so that the
@@ -2342,7 +2475,7 @@
         <itemizedlist>
             <listitem><para><emphasis><filename>populate_sdk_base</filename>:</emphasis>
                 The base class supporting SDK creation under all package
-                managers (i.e. DEB, RPM, and IPK).</para></listitem>
+                managers (i.e. DEB, RPM, and opkg).</para></listitem>
             <listitem><para><emphasis><filename>populate_sdk_deb</filename>:</emphasis>
                 Supports creation of the SDK given the Debian package manager.
                 </para></listitem>
@@ -2350,13 +2483,14 @@
                 Supports creation of the SDK given the RPM package manager.
                 </para></listitem>
             <listitem><para><emphasis><filename>populate_sdk_ipk</filename>:</emphasis>
-                Supports creation of the SDK given the IPK package manager.
+                Supports creation of the SDK given the opkg (IPK format)
+                package manager.
                 </para></listitem>
         </itemizedlist>
     </para>
 
     <para>
-        The <filename>populate_sdk_base</filename> package inherits the
+        The <filename>populate_sdk_base</filename> class inherits the
         appropriate <filename>populate_sdk_*</filename> (i.e.
         <filename>deb</filename>, <filename>rpm</filename>, and
         <filename>ipk</filename>) based on
@@ -2367,8 +2501,8 @@
         The base class ensures all source and destination directories are
         established and then populates the SDK.
         After populating the SDK, the <filename>populate_sdk_base</filename>
-        class constructs two images:
-        <link linkend='var-SDK_ARCH'><filename>SDK_ARCH</filename></link><filename>-nativesdk</filename>,
+        class constructs two sysroots:
+        <filename>${</filename><link linkend='var-SDK_ARCH'><filename>SDK_ARCH</filename></link><filename>}-nativesdk</filename>,
         which contains the cross-compiler and associated tooling, and the
         target, which contains a target root filesystem that is configured for
         the SDK usage.
@@ -2376,8 +2510,8 @@
         <link linkend='var-SDK_OUTPUT'><filename>SDK_OUTPUT</filename></link>,
         which consists of the following:
         <literallayout class='monospaced'>
-     ${SDK_OUTPUT}/&lt;sdk_arch-nativesdk pkgs&gt;
-     ${SDK_OUTPUT}/${SDKTARGETSYSROOT}/&lt;target pkgs&gt;
+     ${SDK_OUTPUT}/${SDK_ARCH}<replaceable>-nativesdk-pkgs</replaceable>
+     ${SDK_OUTPUT}/${SDKTARGETSYSROOT}/<replaceable>target-pkgs</replaceable>
         </literallayout>
     </para>
 
@@ -2480,6 +2614,22 @@
         "<ulink url='&YOCTO_DOCS_DEV_URL;#testing-packages-with-ptest'>Testing Packages With ptest</ulink>"
         section in the Yocto Project Development Manual for more information
         on ptest.
+    </para>
+</section>
+
+<section id='ref-classes-ptest-gnome'>
+    <title><filename>ptest-gnome.bbclass</filename></title>
+
+    <para>
+        Enables package tests (ptests) specifically for GNOME packages,
+        which have tests intended to be executed with
+        <filename>gnome-desktop-testing</filename>.
+    </para>
+
+    <para>
+        For information on setting up and running ptests, see the
+        "<ulink url='&YOCTO_DOCS_DEV_URL;#testing-packages-with-ptest'>Testing Packages With ptest</ulink>"
+        section in the Yocto Project Development Manual.
     </para>
 </section>
 
@@ -2866,37 +3016,37 @@
     <para>
         The class supports the following variables:
         <itemizedlist>
-            <listitem><para><emphasis><link linkend='var-INITRD'><filename>INITRD</filename></link>:</emphasis>
+            <listitem><para><link linkend='var-INITRD'><filename>INITRD</filename></link>:
                 Indicates list of filesystem images to concatenate and use as
                 an initial RAM disk (initrd).
                 This variable is optional.</para></listitem>
-            <listitem><para><emphasis><link linkend='var-ROOTFS'><filename>ROOTFS</filename></link>:</emphasis>
+            <listitem><para><link linkend='var-ROOTFS'><filename>ROOTFS</filename></link>:
                 Indicates a filesystem image to include as the root filesystem.
                 This variable is optional.</para></listitem>
-            <listitem><para><emphasis><link linkend='var-AUTO_SYSLINUXMENU'><filename>AUTO_SYSLINUXMENU</filename></link>:</emphasis>
+            <listitem><para><link linkend='var-AUTO_SYSLINUXMENU'><filename>AUTO_SYSLINUXMENU</filename></link>:
                 Enables creating an automatic menu when set to "1".
                 </para></listitem>
-            <listitem><para><emphasis><link linkend='var-LABELS'><filename>LABELS</filename></link>:</emphasis>
+            <listitem><para><link linkend='var-LABELS'><filename>LABELS</filename></link>:
                 Lists targets for automatic configuration.
                 </para></listitem>
-            <listitem><para><emphasis><link linkend='var-APPEND'><filename>APPEND</filename></link>:</emphasis>
+            <listitem><para><link linkend='var-APPEND'><filename>APPEND</filename></link>:
                 Lists append string overrides for each label.
                 </para></listitem>
-            <listitem><para><emphasis><link linkend='var-SYSLINUX_OPTS'><filename>SYSLINUX_OPTS</filename></link>:</emphasis>
+            <listitem><para><link linkend='var-SYSLINUX_OPTS'><filename>SYSLINUX_OPTS</filename></link>:
                 Lists additional options to add to the syslinux file.
                 Semicolon characters separate multiple options.
                 </para></listitem>
-            <listitem><para><emphasis><link linkend='var-SYSLINUX_SPLASH'><filename>SYSLINUX_SPLASH</filename></link>:</emphasis>
+            <listitem><para><link linkend='var-SYSLINUX_SPLASH'><filename>SYSLINUX_SPLASH</filename></link>:
                 Lists a background for the VGA boot menu when you are using the
                 boot menu.</para></listitem>
-            <listitem><para><emphasis><link linkend='var-SYSLINUX_DEFAULT_CONSOLE'><filename>SYSLINUX_DEFAULT_CONSOLE</filename></link>:</emphasis>
+            <listitem><para><link linkend='var-SYSLINUX_DEFAULT_CONSOLE'><filename>SYSLINUX_DEFAULT_CONSOLE</filename></link>:
                 Set to "console=ttyX" to change kernel boot default console.
                 </para></listitem>
-            <listitem><para><emphasis><link linkend='var-SYSLINUX_SERIAL'><filename>SYSLINUX_SERIAL</filename></link>:</emphasis>
+            <listitem><para><link linkend='var-SYSLINUX_SERIAL'><filename>SYSLINUX_SERIAL</filename></link>:
                 Sets an alternate serial port.
                 Or, turns off serial when the variable is set with an
                 empty string.</para></listitem>
-            <listitem><para><emphasis><link linkend='var-SYSLINUX_SERIAL_TTY'><filename>SYSLINUX_SERIAL_TTY</filename></link>:</emphasis>
+            <listitem><para><link linkend='var-SYSLINUX_SERIAL_TTY'><filename>SYSLINUX_SERIAL_TTY</filename></link>:
                 Sets an alternate "console=tty..." kernel boot argument.
                 </para></listitem>
         </itemizedlist>
@@ -3006,6 +3156,27 @@
     </para>
 </section>
 
+<section id='ref-classes-texinfo'>
+    <title><filename>texinfo.bbclass</filename></title>
+
+    <para>
+        This class should be inherited by recipes whose upstream packages
+        invoke the <filename>texinfo</filename> utilities at build-time.
+        Native and cross recipes are made to use the dummy scripts provided
+        by <filename>texinfo-dummy-native</filename>, for improved performance.
+        Target architecture recipes use the genuine
+        Texinfo utilities.
+        By default, they use the Texinfo utilities on the host system.
+        <note>
+            If you want to use the Texinfo recipe shipped with the build
+            system, you can remove "texinfo-native" from
+            <link linkend='var-ASSUME_PROVIDED'><filename>ASSUME_PROVIDED</filename></link>
+            and makeinfo from
+            <link linkend='var-SANITY_REQUIRED_UTILITIES'><filename>SANITY_REQUIRED_UTILITIES</filename></link>.
+        </note>
+    </para>
+</section>
+
 <section id='ref-classes-tinderclient'>
     <title><filename>tinderclient.bbclass</filename></title>
 
@@ -3078,6 +3249,21 @@
         and
         <link linkend='var-UBOOT_MACHINE'><filename>UBOOT_MACHINE</filename></link>
         variables for additional information.
+    </para>
+</section>
+
+<section id='ref-classes-uninative'>
+    <title><filename>uninative.bbclass</filename></title>
+
+    <para>
+        Provides a means of reusing <filename>native/cross</filename> over
+        multiple distros.
+        <note>
+            Currently, the method used by the <filename>uninative</filename>
+            class is experimental.
+        </note>
+        For more information, see the commit message
+        <ulink url='http://cgit.openembedded.org/openembedded-core/commit/?id=e66c96ae9c7ba21ebd04a4807390f0031238a85a'>here</ulink>.
     </para>
 </section>
 

@@ -21,8 +21,16 @@
 
 # Django settings for Toaster project.
 
+import os, re
+
 DEBUG = True
 TEMPLATE_DEBUG = DEBUG
+
+# Set to True to see the SQL queries in console
+SQL_DEBUG = False
+if os.environ.get("TOASTER_SQLDEBUG", None) is not None:
+    SQL_DEBUG = True
+
 
 ADMINS = (
     # ('Your Name', 'your_email@example.com'),
@@ -42,7 +50,6 @@ DATABASES = {
 }
 
 # Reinterpret database settings if we have DATABASE_URL environment variable defined
-import os, re
 
 if 'DATABASE_URL' in os.environ:
     dburl = os.environ['DATABASE_URL']
@@ -208,6 +215,9 @@ MIDDLEWARE_CLASSES = (
     # 'django.middleware.clickjacking.XFrameOptionsMiddleware',
 )
 
+from os.path import dirname as DN
+SITE_ROOT=DN(DN(os.path.abspath(__file__)))
+
 ROOT_URLCONF = 'toastermain.urls'
 
 # Python dotted path to the WSGI application used by Django's runserver.
@@ -241,6 +251,19 @@ INSTALLED_APPS = (
     'south',
 )
 
+
+# Load django-fresh is TOASTER_DEVEL is set, and the module is available
+FRESH_ENABLED = False
+if os.environ.get('TOASTER_DEVEL', None) is not None:
+    try:
+        import fresh
+        MIDDLEWARE_CLASSES = MIDDLEWARE_CLASSES + ("fresh.middleware.FreshMiddleware",)
+        INSTALLED_APPS = INSTALLED_APPS + ('fresh',)
+        FRESH_ENABLED = True
+    except:
+        pass
+
+
 SOUTH_TESTS_MIGRATE = False
 
 # if we run in managed mode, we need user support
@@ -260,6 +283,10 @@ import os
 currentdir = os.path.dirname(__file__)
 for t in os.walk(os.path.dirname(currentdir)):
     modulename = os.path.basename(t[0])
+    #if we have a virtualenv skip it to avoid incorrect imports
+    if os.environ.has_key('VIRTUAL_ENV') and os.environ['VIRTUAL_ENV'] in t[0]:
+        continue
+
     if ("views.py" in t[2] or "models.py" in t[2]) and not modulename in INSTALLED_APPS:
         INSTALLED_APPS = INSTALLED_APPS + (modulename,)
 
@@ -276,14 +303,28 @@ LOGGING = {
             '()': 'django.utils.log.RequireDebugFalse'
         }
     },
+    'formatters': {
+        'datetime': {
+            'format': '%(levelname)s %(asctime)s %(message)s'
+        }
+    },
     'handlers': {
         'mail_admins': {
             'level': 'ERROR',
             'filters': ['require_debug_false'],
             'class': 'django.utils.log.AdminEmailHandler'
+        },
+        'console': {
+            'level': 'DEBUG',
+            'class': 'logging.StreamHandler',
+            'formatter': 'datetime',
         }
     },
     'loggers': {
+        'toaster' : {
+            'handlers': ['console'],
+            'level': 'DEBUG',
+        },
         'django.request': {
             'handlers': ['mail_admins'],
             'level': 'ERROR',
@@ -291,6 +332,13 @@ LOGGING = {
         },
     }
 }
+
+if DEBUG and SQL_DEBUG:
+    LOGGING['loggers']['django.db.backends'] = {
+            'level': 'DEBUG',
+            'handlers': ['console'],
+        }
+
 
 # If we're using sqlite, we need to tweak the performance a bit
 from django.db.backends.signals import connection_created

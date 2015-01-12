@@ -38,6 +38,8 @@ SRC_URI += "\
   file://python-2.7.3-CVE-2014-1912.patch \
   file://json-flaw-fix.patch \
   file://posix_close.patch \
+  file://remove-BOM-insection-code.patch \
+  file://python-2.7.3-CVE-2014-7185.patch \
 "
 
 S = "${WORKDIR}/Python-${PV}"
@@ -48,6 +50,9 @@ inherit autotools multilib_header python-dir pythonnative
 #Somehow gcc doesn't set __SOFTFP__ when passing -mfloatabi=softp :(
 TARGET_CC_ARCH_append_armv6 = " -D__SOFTFP__"
 TARGET_CC_ARCH_append_armv7a = " -D__SOFTFP__"
+
+# The following is a hack until we drop ac_cv_sizeof_off_t from site files
+EXTRA_OECONF += "${@bb.utils.contains('DISTRO_FEATURES', 'largefile', 'ac_cv_sizeof_off_t=8', '', d)}"
 
 do_configure_prepend() {
 	rm -f ${S}/Makefile.orig
@@ -156,8 +161,8 @@ require python-${PYTHON_MAJMIN}-manifest.inc
 # manual dependency additions
 RPROVIDES_${PN}-core = "${PN}"
 RRECOMMENDS_${PN}-core = "${PN}-readline"
+RRECOMMENDS_${PN}-core_append_class-nativesdk = " nativesdk-python-modules"
 RRECOMMENDS_${PN}-crypt = "openssl"
-RRECOMMENDS_${PN}-crypt_class-nativesdk = "nativesdk-openssl"
 
 # package libpython2
 PACKAGES =+ "lib${BPN}2"

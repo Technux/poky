@@ -145,17 +145,6 @@ python () {
 
     d.setVar('IMAGE_FEATURES', ' '.join(list(remain_features)))
 
-    # Ensure we have the vendor list for complementary package handling
-    ml_vendor_list = ""
-    multilibs = d.getVar('MULTILIBS', True) or ""
-    for ext in multilibs.split():
-        eext = ext.split(':')
-        if len(eext) > 1 and eext[0] == 'multilib':
-            localdata = bb.data.createCopy(d)
-            vendor = localdata.getVar("TARGET_VENDOR_virtclass-multilib-" + eext[1], False)
-            ml_vendor_list += " " + vendor
-    d.setVar('MULTILIB_VENDORS', ml_vendor_list)
-
     check_image_features(d)
     initramfs_image = d.getVar('INITRAMFS_IMAGE', True) or ""
     if initramfs_image != "":
@@ -186,7 +175,9 @@ IMAGE_LINGUAS ?= "de-de fr-fr en-gb"
 
 LINGUAS_INSTALL ?= "${@" ".join(map(lambda s: "locale-base-%s" % s, d.getVar('IMAGE_LINGUAS', True).split()))}"
 
-PSEUDO_PASSWD = "${IMAGE_ROOTFS}"
+# Prefer image, but use the fallback files for lookups if the image ones
+# aren't yet available.
+PSEUDO_PASSWD = "${IMAGE_ROOTFS}:${STAGING_DIR_NATIVE}"
 
 do_rootfs[dirs] = "${TOPDIR}"
 do_rootfs[lockfiles] += "${IMAGE_ROOTFS}.lock"
@@ -197,18 +188,17 @@ do_rootfs[cleandirs] += "${S}"
 do_rootfs[umask] = "022"
 
 # A hook function to support read-only-rootfs IMAGE_FEATURES
-# Currently, it only supports sysvinit system.
 read_only_rootfs_hook () {
 	# Tweak the mount option and fs_passno for rootfs in fstab
 	sed -i -e '/^[#[:space:]]*\/dev\/root/{s/defaults/ro/;s/\([[:space:]]*[[:digit:]]\)\([[:space:]]*\)[[:digit:]]$/\1\20/}' ${IMAGE_ROOTFS}/etc/fstab
 
 	if ${@bb.utils.contains("DISTRO_FEATURES", "sysvinit", "true", "false", d)}; then
-	        # Change the value of ROOTFS_READ_ONLY in /etc/default/rcS to yes
+		# Change the value of ROOTFS_READ_ONLY in /etc/default/rcS to yes
 		if [ -e ${IMAGE_ROOTFS}/etc/default/rcS ]; then
 			sed -i 's/ROOTFS_READ_ONLY=no/ROOTFS_READ_ONLY=yes/' ${IMAGE_ROOTFS}/etc/default/rcS
 		fi
-	        # Run populate-volatile.sh at rootfs time to set up basic files
-	        # and directories to support read-only rootfs.
+		# Run populate-volatile.sh at rootfs time to set up basic files
+		# and directories to support read-only rootfs.
 		if [ -x ${IMAGE_ROOTFS}/etc/init.d/populate-volatile.sh ]; then
 			${IMAGE_ROOTFS}/etc/init.d/populate-volatile.sh
 		fi
@@ -224,6 +214,27 @@ read_only_rootfs_hook () {
 				echo "SSHD_OPTS='-f /etc/ssh/sshd_config_readonly'" >> ${IMAGE_ROOTFS}/etc/default/ssh
 			fi
 		fi
+	fi
+
+	if ${@bb.utils.contains("DISTRO_FEATURES", "systemd", "true", "false", d)}; then
+	    # Update user database files so that services don't fail for a read-only systemd system
+	    for conffile in ${IMAGE_ROOTFS}/usr/lib/sysusers.d/systemd.conf ${IMAGE_ROOTFS}/usr/lib/sysusers.d/systemd-remote.conf; do
+		[ -e $conffile ] || continue
+		grep -v "^#" $conffile | sed -e '/^$/d' | while read type name id comment; do
+		    if [ "$type" = "u" ]; then
+			useradd_params=""
+			[ "$id" != "-" ] && useradd_params="$useradd_params --uid $id"
+			[ "$comment" != "-" ] && useradd_params="$useradd_params --comment $comment"
+			useradd_params="$useradd_params --system $name"
+			eval useradd --root ${IMAGE_ROOTFS} $useradd_params || true
+		    elif [ "$type" = "g" ]; then
+			groupadd_params=""
+			[ "$id" != "-" ] && groupadd_params="$groupadd_params --gid $id"
+			groupadd_params="$groupadd_params --system $name"
+			eval groupadd --root ${IMAGE_ROOTFS} $groupadd_params || true
+		    fi
+		done
+	    done
 	fi
 }
 
@@ -376,12 +387,6 @@ python write_image_manifest () {
         image_manifest.write(image_list_installed_packages(d, 'ver'))
 }
 
-# Make login manager(s) enable automatic login.
-# Useful for devices where we do not want to log in at all (e.g. phones)
-set_image_autologin () {
-        sed -i 's%^AUTOLOGIN=\"false"%AUTOLOGIN="true"%g' ${IMAGE_ROOTFS}/etc/sysconfig/gpelogin
-}
-
 # Can be use to create /etc/timestamp during image construction to give a reasonably 
 # sane default time setting
 rootfs_update_timestamp () {
@@ -419,6 +424,7 @@ do_compile[noexec] = "1"
 do_install[noexec] = "1"
 do_populate_sysroot[noexec] = "1"
 do_package[noexec] = "1"
+do_package_qa[noexec] = "1"
 do_packagedata[noexec] = "1"
 do_package_write_ipk[noexec] = "1"
 do_package_write_deb[noexec] = "1"

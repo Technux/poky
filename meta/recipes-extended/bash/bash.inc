@@ -8,14 +8,13 @@ inherit autotools-brokensep gettext texinfo update-alternatives ptest
 
 PARALLEL_MAKE = ""
 
+EXTRA_AUTORECONF += "--exclude=autoheader"
 EXTRA_OECONF = "--enable-job-control"
 
 ALTERNATIVE_${PN} = "sh"
 ALTERNATIVE_LINK_NAME[sh] = "${base_bindir}/sh"
 ALTERNATIVE_TARGET[sh] = "${base_bindir}/bash"
 ALTERNATIVE_PRIORITY = "100"
-
-export AUTOHEADER = "true"
 
 RDEPENDS_${PN} += "base-files"
 RDEPENDS_${PN}_class-nativesdk = ""
@@ -37,6 +36,10 @@ do_install_append () {
 		mkdir -p ${D}${base_bindir}
 		mv ${D}${bindir}/bash ${D}${base_bindir}
 	fi
+}
+do_install_append_class-target () {
+	# Clean host path in bashbug
+	sed -i -e "s,${STAGING_DIR_TARGET},,g" ${D}${bindir}/bashbug
 }
 
 do_install_ptest () {

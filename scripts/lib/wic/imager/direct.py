@@ -52,8 +52,7 @@ class DirectImageCreator(BaseImageCreator):
     """
 
     def __init__(self, oe_builddir, image_output_dir, rootfs_dir, bootimg_dir,
-                 kernel_dir, native_sysroot, hdddir, staging_data_dir,
-                 creatoropts=None):
+                 kernel_dir, native_sysroot, creatoropts=None):
         """
         Initialize a DirectImageCreator instance.
 
@@ -74,8 +73,6 @@ class DirectImageCreator(BaseImageCreator):
         self.bootimg_dir = bootimg_dir
         self.kernel_dir = kernel_dir
         self.native_sysroot = native_sysroot
-        self.hdddir = hdddir
-        self.staging_data_dir = staging_data_dir
 
     def __write_fstab(self, image_rootfs):
         """overriden to generate fstab (temporarily) in rootfs. This is called
@@ -103,10 +100,18 @@ class DirectImageCreator(BaseImageCreator):
         for num, p in enumerate(parts, 1):
             if not p.mountpoint or p.mountpoint == "/" or p.mountpoint == "/boot":
                 continue
-            if self._ptable_format == 'msdos' and num > 3:
-                device_name = "/dev/" + p.disk + str(num + 1)
-            else:
-                device_name = "/dev/" + p.disk + str(num)
+
+            part = ''
+            # mmc device partitions are named mmcblk0p1, mmcblk0p2..
+            if p.disk.startswith('mmcblk'):
+                part = 'p'
+
+            pnum = num
+            if self._ptable_format == 'msdos' and pnum > 3:
+                # account for logical partition numbering, ex. sda5..
+                pnum += 1
+
+            device_name = "/dev/" + p.disk + part + str(pnum)
 
             opts = "defaults"
             if p.fsopts:

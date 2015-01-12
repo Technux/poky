@@ -24,6 +24,8 @@ import re
 from django import template
 from django.utils import timezone
 from django.template.defaultfilters import filesizeformat
+import json as JsonLib
+from django.utils.safestring import mark_safe
 
 register = template.Library()
 
@@ -39,6 +41,19 @@ def sectohms(time):
         tdsec = 0
     hours = int(tdsec / 3600)
     return "%02d:%02d:%02d" % (hours, int((tdsec - (hours * 3600))/ 60), int(tdsec) % 60)
+
+
+@register.filter(name = 'mapselect')
+def mapselect(value, argument):
+    return map(lambda x: vars(x)[argument], value)
+
+
+@register.filter(name = "json")
+def json(value):
+    # JSON spec says that "\/" is functionally identical to "/" to allow for HTML-tag embedding in JSON strings
+    # unfortunately, I can't find any option in the json module to turn on forward-slash escaping, so we do
+    # it manually here
+    return mark_safe(JsonLib.dumps(value, ensure_ascii=False).replace('</', '<\\/'))
 
 @register.assignment_tag
 def query(qs, **kwargs):
@@ -253,3 +268,11 @@ def get_dict_value(dictionary, key):
         return dictionary[key]
     except (KeyError, IndexError):
         return ''
+
+@register.filter
+def format_build_date(completed_on):
+    now = timezone.now()
+    delta = now - completed_on
+
+    if delta.days >= 1:
+        return True

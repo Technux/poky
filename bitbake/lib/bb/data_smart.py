@@ -592,7 +592,7 @@ class DataSmart(MutableMapping):
             self._makeShadowCopy(var)
         self.dict[var][flag] = value
 
-        if flag == "defaultval" and '_' in var:
+        if flag == "_defaultval" and '_' in var:
             self._setvar_update_overrides(var)
 
         if flag == "unexport" or flag == "export":
@@ -608,8 +608,8 @@ class DataSmart(MutableMapping):
         if local_var is not None:
             if flag in local_var:
                 value = copy.copy(local_var[flag])
-            elif flag == "_content" and "defaultval" in local_var and not noweakdefault:
-                value = copy.copy(local_var["defaultval"])
+            elif flag == "_content" and "_defaultval" in local_var and not noweakdefault:
+                value = copy.copy(local_var["_defaultval"])
         if expand and value:
             # Only getvar (flag == _content) hits the expand cache
             cachename = None
@@ -621,7 +621,7 @@ class DataSmart(MutableMapping):
         if value and flag == "_content" and local_var is not None and "_removeactive" in local_var:
             removes = [self.expand(r) for r in local_var["_removeactive"]]
             filtered = filter(lambda v: v not in removes,
-                              value.split(" "))
+                              value.split())
             value = " ".join(filtered)
             if expand:
                  # We need to ensure the expand cache has the correct value
@@ -743,12 +743,16 @@ class DataSmart(MutableMapping):
                 yield key
 
     def __iter__(self):
+        deleted = set()
         def keylist(d):        
             klist = set()
             for key in d:
                 if key == "_data":
                     continue
+                if key in deleted:
+                    continue
                 if not d[key]:
+                    deleted.add(key)
                     continue
                 klist.add(key)
 

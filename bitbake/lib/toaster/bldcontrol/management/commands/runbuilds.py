@@ -4,6 +4,9 @@ from orm.models import Build
 from bldcontrol.bbcontroller import getBuildEnvironmentController, ShellCmdException, BuildSetupException
 from bldcontrol.models import BuildRequest, BuildEnvironment, BRError
 import os
+import logging
+
+logger = logging.getLogger("toaster")
 
 class Command(NoArgsCommand):
     args    = ""
@@ -32,6 +35,7 @@ class Command(NoArgsCommand):
                 # select the build environment and the request to build
                 br = self._selectBuildRequest()
             except IndexError as e:
+                # logger.debug("runbuilds: No build request")
                 return
             try:
                 bec = self._selectBuildEnvironment()
@@ -39,26 +43,28 @@ class Command(NoArgsCommand):
                 # we could not find a BEC; postpone the BR
                 br.state = BuildRequest.REQ_QUEUED
                 br.save()
+                logger.debug("runbuilds: No build env")
                 return
 
+            logger.debug("runbuilds: starting build %s, environment %s" % (br, bec.be))
+            # let the build request know where it is being executed
+            br.environment = bec.be
+            br.save()
+
             # set up the buid environment with the needed layers
-            print "Build %s, Environment %s" % (br, bec.be)
             bec.setLayers(br.brbitbake_set.all(), br.brlayer_set.all())
+            bec.writePreConfFile(br.brvariable_set.all())
 
-            # get the bb server running
-            bbctrl = bec.getBBController()
-
-            # let toasterui that this is a managed build
-            bbctrl.setVariable("TOASTER_BRBE", "%d:%d" % (br.pk, bec.be.pk))
-
-            # set the build configuration
-            for variable in br.brvariable_set.all():
-                bbctrl.setVariable(variable.name, variable.value)
+            # get the bb server running with the build req id and build env id
+            bbctrl = bec.getBBController("%d:%d" % (br.pk, bec.be.pk))
 
             # trigger the build command
-            bbctrl.build(list(map(lambda x:x.target, br.brtarget_set.all())))
+            task = reduce(lambda x, y: x if len(y)== 0 else y, map(lambda y: y.task, br.brtarget_set.all()))
+            if len(task) == 0:
+                task = None
+            bbctrl.build(list(map(lambda x:x.target, br.brtarget_set.all())), task)
 
-            print "Build launched, exiting"
+            logger.debug("runbuilds: Build launched, exiting")
             # disconnect from the server
             bbctrl.disconnect()
 
@@ -66,7 +72,7 @@ class Command(NoArgsCommand):
 
 
         except Exception as e:
-            print " EE Error executing shell command\n", e
+            logger.error("runbuilds: Error executing shell command %s" % e)
             traceback.print_exc(e)
             BRError.objects.create(req = br,
                 errtype = str(type(e)),
@@ -76,6 +82,7 @@ class Command(NoArgsCommand):
             br.save()
             bec.be.lock = BuildEnvironment.LOCK_FREE
             bec.be.save()
+
 
 
     def cleanup(self):
