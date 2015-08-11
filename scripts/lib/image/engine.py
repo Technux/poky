@@ -30,19 +30,11 @@
 
 import os
 import sys
-from abc import ABCMeta, abstractmethod
-import shlex
-import json
-import subprocess
-import shutil
 
-import os, sys, errno
 from wic import msger, creator
-from wic.utils import cmdln, misc, errors
-from wic.conf import configmgr
+from wic.utils import misc
 from wic.plugin import pluginmgr
-from wic.__version__ import VERSION
-from wic.utils.oe.misc import *
+from wic.utils.oe import misc
 
 
 def verify_build_env():
@@ -60,34 +52,11 @@ def verify_build_env():
     return True
 
 
-def find_artifacts(image_name):
-    """
-    Gather the build artifacts for the current image (the image_name
-    e.g. core-image-minimal) for the current MACHINE set in local.conf
-    """
-    bitbake_env_lines = get_bitbake_env_lines()
-
-    rootfs_dir = kernel_dir = bootimg_dir = native_sysroot = ""
-
-    for line in bitbake_env_lines.split('\n'):
-        if (get_line_val(line, "IMAGE_ROOTFS")):
-            rootfs_dir = get_line_val(line, "IMAGE_ROOTFS")
-            continue
-        if (get_line_val(line, "STAGING_KERNEL_DIR")):
-            kernel_dir = get_line_val(line, "STAGING_KERNEL_DIR")
-            continue
-        if (get_line_val(line, "STAGING_DIR_NATIVE")):
-            native_sysroot = get_line_val(line, "STAGING_DIR_NATIVE")
-            continue
-
-    return (rootfs_dir, kernel_dir, bootimg_dir, native_sysroot)
-
-
 CANNED_IMAGE_DIR = "lib/image/canned-wks" # relative to scripts
 SCRIPTS_CANNED_IMAGE_DIR = "scripts/" + CANNED_IMAGE_DIR
 
 def build_canned_image_list(dl):
-    layers_path = get_bitbake_var("BBLAYERS")
+    layers_path = misc.get_bitbake_var("BBLAYERS")
     canned_wks_layer_dirs = []
 
     if layers_path is not None:
@@ -178,9 +147,9 @@ def list_source_plugins():
         print "  %s" % plugin
 
 
-def wic_create(args, wks_file, rootfs_dir, bootimg_dir, kernel_dir,
-               native_sysroot, scripts_path, image_output_dir, debug,
-               properties_file, properties=None):
+def wic_create(wks_file, rootfs_dir, bootimg_dir, kernel_dir,
+               native_sysroot, scripts_path, image_output_dir,
+               compressor, debug):
     """Create image
 
     wks_file - user-defined OE kickstart file
@@ -190,8 +159,7 @@ def wic_create(args, wks_file, rootfs_dir, bootimg_dir, kernel_dir,
     native_sysroot - absolute path to the build's native sysroots dir
     scripts_path - absolute path to /scripts dir
     image_output_dir - dirname to create for image
-    properties_file - use values from this file if nonempty i.e no prompting
-    properties - use values from this string if nonempty i.e no prompting
+    compressor - compressor utility to compress the image
 
     Normally, the values for the build artifacts values are determined
     by 'wic -e' from the output of the 'bitbake -e' command given an
@@ -200,7 +168,7 @@ def wic_create(args, wks_file, rootfs_dir, bootimg_dir, kernel_dir,
     values from the output of 'bitbake -e':
 
     rootfs_dir:        IMAGE_ROOTFS
-    kernel_dir:        STAGING_KERNEL_DIR
+    kernel_dir:        DEPLOY_DIR_IMAGE
     native_sysroot:    STAGING_DIR_NATIVE
 
     In the above case, bootimg_dir remains unset and the
@@ -217,22 +185,13 @@ def wic_create(args, wks_file, rootfs_dir, bootimg_dir, kernel_dir,
         print "BUILDDIR not found, exiting. (Did you forget to source oe-init-build-env?)"
         sys.exit(1)
 
-    direct_args = list()
-    direct_args.insert(0, oe_builddir)
-    direct_args.insert(0, image_output_dir)
-    direct_args.insert(0, wks_file)
-    direct_args.insert(0, rootfs_dir)
-    direct_args.insert(0, bootimg_dir)
-    direct_args.insert(0, kernel_dir)
-    direct_args.insert(0, native_sysroot)
-    direct_args.insert(0, "direct")
-
     if debug:
         msger.set_loglevel('debug')
 
     cr = creator.Creator()
 
-    cr.main(direct_args)
+    cr.main(["direct", native_sysroot, kernel_dir, bootimg_dir, rootfs_dir,
+             wks_file, image_output_dir, oe_builddir, compressor or ""])
 
     print "\nThe image(s) were created using OE kickstart file:\n  %s" % wks_file
 
@@ -269,7 +228,10 @@ def wic_list(args, scripts_path, properties_file):
             wks_file = args[0]
             fullpath = find_canned_image(scripts_path, wks_file)
             if not fullpath:
-                print "No image named %s found, exiting.  (Use 'wic list images' to list available images, or specify a fully-qualified OE kickstart (.wks) filename)\n" % wks_file
+                print "No image named %s found, exiting. "\
+                      "(Use 'wic list images' to list available images, or "\
+                      "specify a fully-qualified OE kickstart (.wks) "\
+                      "filename)\n" % wks_file
                 sys.exit(1)
             list_canned_image_help(scripts_path, fullpath)
             return True

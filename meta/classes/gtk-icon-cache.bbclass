@@ -1,6 +1,6 @@
 FILES_${PN} += "${datadir}/icons/hicolor"
 
-DEPENDS += "${@['hicolor-icon-theme', '']['${BPN}' == 'hicolor-icon-theme']} gtk-update-icon-cache-native"
+DEPENDS += "${@['hicolor-icon-theme', '']['${BPN}' == 'hicolor-icon-theme']} gtk-icon-utils-native"
 
 gtk_icon_cache_postinst() {
 if [ "x$D" != "x" ]; then
@@ -42,7 +42,7 @@ python populate_packages_append () {
             continue
 
         bb.note("adding hicolor-icon-theme dependency to %s" % pkg)
-        rdepends = ' ' + d.getVar('MLPREFIX') + "hicolor-icon-theme"
+        rdepends = ' ' + d.getVar('MLPREFIX', False) + "hicolor-icon-theme"
         d.appendVar('RDEPENDS_%s' % pkg, rdepends)
     
         bb.note("adding gtk-icon-cache postinst and postrm scripts to %s" % pkg)

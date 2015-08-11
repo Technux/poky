@@ -35,6 +35,13 @@ inherit autotools texinfo
 
 EXTRA_OECONF = "--without-x"
 
-PARALLEL_MAKEINST = ""
-
 BBCLASSEXTEND = "native nativesdk"
+
+PACKAGECONFIG ??= ""
+PACKAGECONFIG[libbsd] = "ac_cv_lib_bsd_main=yes,ac_cv_lib_bsd_main=no,libbsd"
+
+do_install_prepend () {
+    # Create bindir to fix parallel installation issues
+    mkdir -p ${D}/${bindir}
+    mkdir -p ${D}/${datadir}
+}

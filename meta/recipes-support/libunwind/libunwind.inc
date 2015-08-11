@@ -8,7 +8,7 @@ SRC_URI = "${SAVANNAH_NONGNU_MIRROR}/${BPN}/${BPN}-${PV}.tar.gz"
 inherit autotools
 
 PACKAGECONFIG ??= ""
-PACKAGECONFIG[lzma] = "--enable-minidebuginfo,--disable-minidebuginfo,lzma"
+PACKAGECONFIG[lzma] = "--enable-minidebuginfo,--disable-minidebuginfo,xz"
 
 EXTRA_OECONF_arm = "--enable-debug-frame"
 EXTRA_OECONF_aarch64 = "--enable-debug-frame"
@@ -22,6 +22,15 @@ LDFLAGS += "${LIBATOMICS}"
 LIBATOMICS_armv5 = "-latomic_ops"
 LIBATOMICS_armv4 = "-latomic_ops"
 LIBATOMICS ?= ""
+
+LDFLAGS_append_x86 = " -fuse-ld=gold"
+LDFLAGS_append_x86-64 = " -fuse-ld=gold"
+
+LDFLAGS_append_arm = " -fuse-ld=gold"
+LDFLAGS_append_aarch64 = " -fuse-ld=gold"
+
+LDFLAGS_append_powerpc = " -fuse-ld=gold"
+LDFLAGS_append_powerpc64 = " -fuse-ld=gold"
 
 DEPENDS += "${DEPLIBATOMICS}"
 DEPLIBATOMICS_armv5 = "libatomics-ops"

@@ -30,11 +30,13 @@ WARN_QA ?= "ldflags useless-rpaths rpaths staticdev libdir xorg-driver-abi \
             textrel already-stripped incompatible-license files-invalid \
             installed-vs-shipped compile-host-path install-host-path \
             pn-overrides infodir build-deps file-rdeps \
+            unknown-configure-option symlink-to-sysroot multilib \
+            invalid-pkgconfig \
             "
 ERROR_QA ?= "dev-so debug-deps dev-deps debug-files arch pkgconfig la \
             perms dep-cmp pkgvarcheck perm-config perm-line perm-link \
             split-strip packages-list pkgv-undefined var-undefined \
-            version-going-backwards \
+            version-going-backwards expanded-d \
             "
 
 ALL_QA = "${WARN_QA} ${ERROR_QA}"
@@ -51,6 +53,14 @@ def package_qa_get_machine_dict():
     return {
             "darwin9" : { 
                         "arm" :       (40,     0,    0,          True,          32),
+                      },
+            "eabi" : {
+                        "arm" :       (40,     0,    0,          True,          32),
+                      },
+            "elf" : {
+                        "i586" :      (3,      0,    0,          True,          32),
+                        "x86_64":     (62,     0,    0,          True,          64),
+                        "epiphany":   (4643,   0,    0,          True,          32),
                       },
             "linux" : { 
                         "aarch64" :   (183,    0,    0,          True,          64),
@@ -76,6 +86,7 @@ def package_qa_get_machine_dict():
                         "sh4":        (42,     0,    0,          True,          32),
                         "sparc":      ( 2,     0,    0,          False,         32),
                         "microblaze":  (189,   0,    0,          False,         32),
+                        "microblazeeb":(189,   0,    0,          False,         32),
                         "microblazeel":(189,   0,    0,          True,          32),
                       },
             "linux-uclibc" : { 
@@ -96,6 +107,8 @@ def package_qa_get_machine_dict():
 
                       },
             "linux-musl" : { 
+                        "aarch64" :   (183,    0,    0,            True,          64),
+                        "aarch64_be" :(183,    0,    0,            False,         64),
                         "arm" :       (  40,    97,    0,          True,          32),
                         "armeb":      (  40,    97,    0,          False,         32),
                         "powerpc":    (  20,     0,    0,          False,         32),
@@ -445,6 +458,11 @@ def package_qa_check_arch(path,name,d, elf, messages):
     provides = d.getVar('PROVIDES', True)
     bpn = d.getVar('BPN', True)
 
+    if target_arch == "allarch":
+        pn = d.getVar('PN', True)
+        messages["arch"] = pn + ": Recipe inherits the allarch class, but has packaged architecture-specific binaries"
+        return
+
     # FIXME: Cross package confuse this check, so just skip them
     for s in ['cross', 'nativesdk', 'cross-canadian']:
         if bb.data.inherits_class(s, d):
@@ -604,7 +622,6 @@ def package_qa_check_symlink_to_sysroot(path, name, d, elf, messages):
             if target.startswith(tmpdir):
                 trimmed = path.replace(os.path.join (d.getVar("PKGDEST", True), name), "")
                 messages["symlink-to-sysroot"] = "Symlink %s in %s points to TMPDIR" % (trimmed, name)
-
 def package_qa_check_license(workdir, d):
     """
     Check for changes in the license files 
@@ -803,13 +820,14 @@ def package_qa_check_rdepends(pkg, pkgdest, skip, taskdeps, packages, d):
             if bb.data.inherits_class('nativesdk', d):
                 ignored_file_rdeps |= set(['/bin/bash', '/usr/bin/perl'])
             # For Saving the FILERDEPENDS
-            filerdepends = set()
+            filerdepends = {}
             rdep_data = oe.packagedata.read_subpkgdata(pkg, d)
             for key in rdep_data:
                 if key.startswith("FILERDEPENDS_"):
                     for subkey in rdep_data[key].split():
-                        filerdepends.add(subkey)
-            filerdepends -= ignored_file_rdeps
+                        if subkey not in ignored_file_rdeps:
+                            # We already know it starts with FILERDEPENDS_
+                            filerdepends[subkey] = key[13:]
 
             if filerdepends:
                 next = rdepends
@@ -841,31 +859,27 @@ def package_qa_check_rdepends(pkg, pkgdest, skip, taskdeps, packages, d):
                 # case there is a RDEPENDS_pkg = "python" in the recipe.
                 for py in [ d.getVar('MLPREFIX', True) + "python", "python" ]:
                     if py in done:
-                        filerdepends.discard("/usr/bin/python")
+                        filerdepends.pop("/usr/bin/python",None)
                         done.remove(py)
                 for rdep in done:
                     # For Saving the FILERPROVIDES, RPROVIDES and FILES_INFO
-                    rdep_rprovides = set()
                     rdep_data = oe.packagedata.read_subpkgdata(rdep, d)
                     for key in rdep_data:
                         if key.startswith("FILERPROVIDES_") or key.startswith("RPROVIDES_"):
                             for subkey in rdep_data[key].split():
-                                rdep_rprovides.add(subkey)
+                                filerdepends.pop(subkey,None)
                         # Add the files list to the rprovides
                         if key == "FILES_INFO":
                             # Use eval() to make it as a dict
                             for subkey in eval(rdep_data[key]):
-                                rdep_rprovides.add(subkey)
-                    filerdepends -= rdep_rprovides
+                                filerdepends.pop(subkey,None)
                     if not filerdepends:
                         # Break if all the file rdepends are met
                         break
-                    else:
-                        # Clear it for the next loop
-                        rdep_rprovides.clear()
             if filerdepends:
-                error_msg = "%s requires %s, but no providers in its RDEPENDS" % \
-                            (pkg, ', '.join(str(e) for e in filerdepends))
+                for key in filerdepends:
+                    error_msg = "%s contained in package %s requires %s, but no providers found in its RDEPENDS" % \
+                            (filerdepends[key],pkg, key)
                 sane = package_qa_handle_error("file-rdeps", error_msg, d)
 
     return sane
@@ -906,6 +920,33 @@ def package_qa_check_deps(pkg, pkgdest, skip, d):
 
     return sane
 
+QAPATHTEST[expanded-d] = "package_qa_check_expanded_d"
+def package_qa_check_expanded_d(path,name,d,elf,messages):
+    """
+    Check for the expanded D (${D}) value in pkg_* and FILES
+    variables, warn the user to use it correctly.
+    """
+
+    sane = True
+    expanded_d = d.getVar('D',True)
+
+    # Get packages for current recipe and iterate
+    packages = d.getVar('PACKAGES', True).split(" ")
+    for pak in packages:
+    # Go through all variables and check if expanded D is found, warn the user accordingly
+        for var in 'FILES','pkg_preinst', 'pkg_postinst', 'pkg_prerm', 'pkg_postrm':
+            bbvar = d.getVar(var + "_" + pak, False)
+            if bbvar:
+                # Bitbake expands ${D} within bbvar during the previous step, so we check for its expanded value
+                if expanded_d in bbvar:
+                    if var == 'FILES':
+                        messages["expanded-d"] = "FILES in %s recipe should not contain the ${D} variable as it references the local build directory not the target filesystem, best solution is to remove the ${D} reference" % pak
+                        sane = False
+                    else:
+                        messages["expanded-d"] = "%s in %s recipe contains ${D}, it should be replaced by $D instead" % (var, pak)
+                        sane = False
+    return sane
+
 # The PACKAGE FUNC to scan each package
 python do_package_qa () {
     import subprocess
@@ -940,12 +981,12 @@ python do_package_qa () {
 
     # Scan the packages...
     pkgdest = d.getVar('PKGDEST', True)
-    packages = d.getVar('PACKAGES', True)
+    packages = set((d.getVar('PACKAGES', True) or '').split())
 
     cpath = oe.cachedpath.CachedPath()
     global pkgfiles
     pkgfiles = {}
-    for pkg in (packages or "").split():
+    for pkg in packages:
         pkgfiles[pkg] = []
         for walkroot, dirs, files in cpath.walk(pkgdest + "/" + pkg):
             for file in files:
@@ -969,7 +1010,7 @@ python do_package_qa () {
     walk_sane = True
     rdepends_sane = True
     deps_sane = True
-    for package in packages.split():
+    for package in packages:
         skip = (d.getVar('INSANE_SKIP_' + package, True) or "").split()
         if skip:
             bb.note("Package %s skipping QA tests: %s" % (package, str(skip)))
@@ -1099,7 +1140,26 @@ Missing inherit gettext?""" % (gt, config))
                 package_qa_handle_error("unknown-configure-option", error_msg, d)
         except subprocess.CalledProcessError:
             pass
+
+    # Check invalid PACKAGECONFIG
+    pkgconfig = (d.getVar("PACKAGECONFIG", True) or "").split()
+    if pkgconfig:
+        pkgconfigflags = d.getVarFlags("PACKAGECONFIG") or {}
+        for pconfig in pkgconfig:
+            if pconfig not in pkgconfigflags:
+                pn = d.getVar('PN', True)
+                error_msg = "%s: invalid PACKAGECONFIG: %s" % (pn, pconfig)
+                package_qa_handle_error("invalid-pkgconfig", error_msg, d)
 }
+
+python do_qa_unpack() {
+    bb.note("Checking has ${S} been created")
+
+    s_dir = d.getVar('S', True)
+    if not os.path.exists(s_dir):
+        bb.warn('%s: the directory %s (%s) pointed to by the S variable doesn\'t exist - please set S within the recipe to point to where the source has been unpacked to' % (d.getVar('PN', True), d.getVar('S', False), s_dir))
+}
+
 # The Staging Func, to check all staging
 #addtask qa_staging after do_populate_sysroot before do_build
 do_populate_sysroot[postfuncs] += "do_qa_staging "
@@ -1108,6 +1168,9 @@ do_populate_sysroot[postfuncs] += "do_qa_staging "
 # have it in DEPENDS and for correct LIC_FILES_CHKSUM
 #addtask qa_configure after do_configure before do_compile
 do_configure[postfuncs] += "do_qa_configure "
+
+# Check does S exist.
+do_unpack[postfuncs] += "do_qa_unpack"
 
 python () {
     tests = d.getVar('ALL_QA', True).split()
@@ -1145,7 +1208,7 @@ python () {
         for dep in (d.getVar('QADEPENDS', True) or "").split():
             d.appendVarFlag('do_package_qa', 'depends', " %s:do_populate_sysroot" % dep)
         for var in 'RDEPENDS', 'RRECOMMENDS', 'RSUGGESTS', 'RCONFLICTS', 'RPROVIDES', 'RREPLACES', 'FILES', 'pkg_preinst', 'pkg_postinst', 'pkg_prerm', 'pkg_postrm', 'ALLOW_EMPTY':
-            if d.getVar(var):
+            if d.getVar(var, False):
                 issues.append(var)
     else:
         d.setVarFlag('do_package_qa', 'rdeptask', '')

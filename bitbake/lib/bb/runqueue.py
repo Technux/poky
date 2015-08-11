@@ -1096,6 +1096,13 @@ class RunQueue:
             raise
         except SystemExit:
             raise
+        except bb.BBHandledException:
+            try:
+                self.teardown_workers()
+            except:
+                pass
+            self.state = runQueueComplete
+            raise
         except:
             logger.error("An uncaught exception occured in runqueue, please see the failure below:")
             try:
@@ -1154,9 +1161,14 @@ class RunQueue:
             sq_hash.append(self.rqdata.runq_hash[task])
             sq_taskname.append(taskname)
             sq_task.append(task)
-        call = self.hashvalidate + "(sq_fn, sq_task, sq_hash, sq_hashfn, d)"
-        locs = { "sq_fn" : sq_fn, "sq_task" : sq_taskname, "sq_hash" : sq_hash, "sq_hashfn" : sq_hashfn, "d" : self.cooker.data }
-        valid = bb.utils.better_eval(call, locs)
+        locs = { "sq_fn" : sq_fn, "sq_task" : sq_taskname, "sq_hash" : sq_hash, "sq_hashfn" : sq_hashfn, "d" : self.cooker.expanded_data }
+        try:
+            call = self.hashvalidate + "(sq_fn, sq_task, sq_hash, sq_hashfn, d, siginfo=True)"
+            valid = bb.utils.better_eval(call, locs)
+        # Handle version with no siginfo parameter
+        except TypeError:
+            call = self.hashvalidate + "(sq_fn, sq_task, sq_hash, sq_hashfn, d)"
+            valid = bb.utils.better_eval(call, locs)
         for v in valid:
             valid_new.add(sq_task[v])
 
@@ -1268,6 +1280,9 @@ class RunQueueExecute:
         if rq.fakeworkerpipe:
             rq.fakeworkerpipe.setrunqueueexec(self)
 
+        if self.number_tasks <= 0:
+             bb.fatal("Invalid BB_NUMBER_THREADS %s" % self.number_tasks)
+
     def runqueue_process_waitpid(self, task, status):
 
         # self.build_stamps[pid] may not exist when use shared work directory.
@@ -1331,7 +1346,7 @@ class RunQueueExecute:
             taskname = self.rqdata.runq_task[depid]
             taskdata[dep] = [pn, taskname, fn]
         call = self.rq.depvalidate + "(task, taskdata, notneeded, d)"
-        locs = { "task" : task, "taskdata" : taskdata, "notneeded" : self.scenequeue_notneeded, "d" : self.cooker.data }
+        locs = { "task" : task, "taskdata" : taskdata, "notneeded" : self.scenequeue_notneeded, "d" : self.cooker.expanded_data }
         valid = bb.utils.better_eval(call, locs)
         return valid
 
@@ -1400,7 +1415,7 @@ class RunQueueExecuteTasks(RunQueueExecute):
 
             call = self.rq.setsceneverify + "(covered, tasknames, fnids, fns, d, invalidtasks=invalidtasks)"
             call2 = self.rq.setsceneverify + "(covered, tasknames, fnids, fns, d)"
-            locs = { "covered" : self.rq.scenequeue_covered, "tasknames" : self.rqdata.runq_task, "fnids" : self.rqdata.runq_fnid, "fns" : self.rqdata.taskData.fn_index, "d" : self.cooker.data, "invalidtasks" : invalidtasks }
+            locs = { "covered" : self.rq.scenequeue_covered, "tasknames" : self.rqdata.runq_task, "fnids" : self.rqdata.runq_fnid, "fns" : self.rqdata.taskData.fn_index, "d" : self.cooker.expanded_data, "invalidtasks" : invalidtasks }
             # Backwards compatibility with older versions without invalidtasks
             try:
                 covered_remove = bb.utils.better_eval(call, locs)
@@ -1565,7 +1580,12 @@ class RunQueueExecuteTasks(RunQueueExecute):
             taskdep = self.rqdata.dataCache.task_deps[fn]
             if 'fakeroot' in taskdep and taskname in taskdep['fakeroot'] and not self.cooker.configuration.dry_run:
                 if not self.rq.fakeworker:
-                    self.rq.start_fakeworker(self)
+                    try:
+                        self.rq.start_fakeworker(self)
+                    except OSError as exc:
+                        logger.critical("Failed to spawn fakeroot worker to run %s:%s: %s" % (fn, taskname, str(exc)))
+                        self.rq.state = runQueueFailed
+                        return True
                 self.rq.fakeworker.stdin.write("<runtask>" + pickle.dumps((fn, task, taskname, False, self.cooker.collection.get_file_appends(fn), taskdepdata)) + "</runtask>")
                 self.rq.fakeworker.stdin.flush()
             else:
@@ -1610,7 +1630,8 @@ class RunQueueExecuteTasks(RunQueueExecute):
                 pn = self.rqdata.dataCache.pkg_fn[fn]
                 taskname = self.rqdata.runq_task[revdep]
                 deps = self.rqdata.runq_depends[revdep]
-                taskdepdata[revdep] = [pn, taskname, fn, deps]
+                provides = self.rqdata.dataCache.fn_provides[fn]
+                taskdepdata[revdep] = [pn, taskname, fn, deps, provides]
                 for revdep2 in deps:
                     if revdep2 not in taskdepdata:
                         additional.append(revdep2)
@@ -1820,7 +1841,7 @@ class RunQueueExecuteScenequeue(RunQueueExecute):
                 sq_taskname.append(taskname)
                 sq_task.append(task)
             call = self.rq.hashvalidate + "(sq_fn, sq_task, sq_hash, sq_hashfn, d)"
-            locs = { "sq_fn" : sq_fn, "sq_task" : sq_taskname, "sq_hash" : sq_hash, "sq_hashfn" : sq_hashfn, "d" : self.cooker.data }
+            locs = { "sq_fn" : sq_fn, "sq_task" : sq_taskname, "sq_hash" : sq_hash, "sq_hashfn" : sq_hashfn, "d" : self.cooker.expanded_data }
             valid = bb.utils.better_eval(call, locs)
 
             valid_new = stamppresent

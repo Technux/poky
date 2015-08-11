@@ -1,5 +1,6 @@
 import os
 import unittest
+import subprocess
 from oeqa.oetest import oeRuntimeTest
 from oeqa.utils.decorators import *
 
@@ -13,16 +14,26 @@ common_errors = [
     "usbhid: probe of ",
     "_OSC failed (AE_ERROR)",
     "_OSC failed (AE_SUPPORT)",
-    "AE_ALREADY_EXISTS"
-    "ACPI _OSC request failed (AE_SUPPORT)"
+    "AE_ALREADY_EXISTS",
+    "ACPI _OSC request failed (AE_SUPPORT)",
     "can\'t disable ASPM",
     "Failed to load module \"vesa\"",
     "Failed to load module vesa",
     "Failed to load module \"modesetting\"",
     "Failed to load module modesetting",
     "Failed to load module \"glx\"",
+    "Failed to load module \"fbdev\"",
+    "Failed to load module fbdev",
     "Failed to load module glx",
-    "[drm] Cannot find any crtc or sizes - going 1024x768"
+    "[drm] Cannot find any crtc or sizes - going 1024x768",
+    "_OSC failed (AE_NOT_FOUND); disabling ASPM",
+    "Open ACPI failed (/var/run/acpid.socket) (No such file or directory)",
+    "NX (Execute Disable) protection cannot be enabled: non-PAE kernel!",
+    "hd.: possibly failed opcode",
+    'NETLINK INITIALIZATION FAILED',
+    'kernel: Cannot find map file',
+    'omap_hwmod: debugss: _wait_target_disable failed',
+    'VGA arbiter: cannot open kernel arbiter, no multi-card support',
     ]
 
 x86_common = [
@@ -34,21 +45,24 @@ x86_common = [
 
 qemux86_common = [
     'Fast TSC calibration', 
-    '_OSC failed (AE_NOT_FOUND); disabling ASPM',
-    'Open ACPI failed (/var/run/acpid.socket) (No such file or directory)',
     'wrong ELF class',
+    "fail to add MMCONFIG information, can't access extended PCI configuration space under this bridge.",
+    "can't claim BAR ",
 ] + common_errors
 
 ignore_errors = { 
     'default' : common_errors,
     'qemux86' : [
-        'Failed to access perfctr msr (MSR c1 is 0)',
-        "fail to add MMCONFIG information, can't access extended PCI configuration space under this bridge.",
+        'Failed to access perfctr msr (MSR',
         ] + qemux86_common,
     'qemux86-64' : qemux86_common,
     'qemumips' : [
         'Failed to load module "glx"',
+        'pci 0000:00:00.0: [Firmware Bug]: reg 0x..: invalid BAR (can\'t size)',
         ] + common_errors,
+    'qemumips64' : [
+        'pci 0000:00:00.0: [Firmware Bug]: reg 0x..: invalid BAR (can\'t size)',
+         ] + common_errors,
     'qemuppc' : [
         'PCI 0000:00 Cannot reserve Legacy IO [io  0x0000-0x0fff]',
         'host side 80-wire cable detection failed, limiting max speed',
@@ -60,7 +74,28 @@ ignore_errors = {
         'mmci-pl18x: probe of fpga:0b failed with error -22',
         'Failed to load module "glx"'
         ] + common_errors,
-    'emenlow' : x86_common,
+    'qemuarm64' : [
+        'Fatal server error:',
+        '(EE) Server terminated with error (1). Closing log file.',
+        ] + common_errors,
+    'emenlow' : [
+        '[Firmware Bug]: ACPI: No _BQC method, cannot determine initial brightness',
+        '(EE) Failed to load module "psb"',
+        '(EE) Failed to load module psb',
+        '(EE) Failed to load module "psbdrv"',
+        '(EE) Failed to load module psbdrv',
+        '(EE) open /dev/fb0: No such file or directory',
+        '(EE) AIGLX: reverting to software rendering',
+        ] + x86_common,
+    'core2_32' : [
+        '[Firmware Bug]: ACPI: No _BQC method, cannot determine initial brightness',
+        '(EE) Failed to load module "psb"',
+        '(EE) Failed to load module psb',
+        '(EE) Failed to load module "psbdrv"',
+        '(EE) Failed to load module psbdrv',
+        '(EE) open /dev/fb0: No such file or directory',
+        '(EE) AIGLX: reverting to software rendering',
+        ] + x86_common,
     'crownbay' : x86_common,
     'genericx86' : x86_common,
     'genericx86-64' : x86_common,
@@ -69,13 +104,11 @@ ignore_errors = {
         ] + common_errors,
     'minnow' : [
         'netlink init failed',
-        'NETLINK INITIALIZATION FAILED',
         ] + common_errors,
     'jasperforest' : [
         'Activated service \'org.bluez\' failed:',
         'Unable to find NFC netlink family',
         'netlink init failed',
-        'NETLINK INITIALIZATION FAILED',
         ] + common_errors,
 }
 
@@ -91,8 +124,7 @@ class ParseLogsTest(oeRuntimeTest):
         self.msg = ""
 
     def getMachine(self):
-        (status, output) = self.target.run("uname -n")
-        return output
+        return oeRuntimeTest.tc.d.getVar("MACHINE", True)
 
     #get some information on the CPU of the machine to display at the beginning of the output. This info might be useful in some cases.
     def getHardwareInfo(self):
@@ -129,6 +161,20 @@ class ParseLogsTest(oeRuntimeTest):
                             logs.append(os.path.join(location,str(logfile)))
         return logs
 
+    #copy the log files to be parsed locally
+    def transfer_logs(self, log_list):
+        target_logs = 'target_logs'
+        if not os.path.exists(target_logs):
+            os.makedirs(target_logs)
+        for f in log_list:
+            self.target.copy_from(f, target_logs)
+
+    #get the local list of logs
+    def get_local_log_list(self, log_locations):
+        self.transfer_logs(self.getLogList(log_locations))
+        logs = [ os.path.join('target_logs',f) for f in os.listdir('target_logs') if os.path.isfile(os.path.join('target_logs',f)) ]
+        return logs
+
     #build the grep command to be used with filters and exclusions
     def build_grepcmd(self, errors, ignore_errors, log):
         grepcmd = "grep "
@@ -159,22 +205,24 @@ class ParseLogsTest(oeRuntimeTest):
     def parse_logs(self, errors, ignore_errors, logs, lines_before = 10, lines_after = 10):
         results = {}
         rez = []
+        grep_output = ''
         for log in logs:
+            result = None
             thegrep = self.build_grepcmd(errors, ignore_errors, log)
             try:
-                (status, result) = self.target.run(thegrep)
+                result = subprocess.check_output(thegrep, shell=True)
             except:
                 pass
-            if result:
-                results[log] = {}
+            if (result is not None):
+                results[log.replace('target_logs/','')] = {}
                 rez = result.splitlines()
                 for xrez in rez:
                     command = "grep \"\\"+str(xrez)+"\" -B "+str(lines_before)+" -A "+str(lines_after)+" "+str(log)
                     try:
-                        (status, yrez) = self.target.run(command)
+                        grep_output = subprocess.check_output(command, shell=True)
                     except:
                         pass
-                    results[log][xrez]=yrez
+                    results[log.replace('target_logs/','')][xrez]=grep_output
         return results
 
     #get the output of dmesg and write it in a file. This file is added to log_locations.
@@ -182,10 +230,11 @@ class ParseLogsTest(oeRuntimeTest):
         (status, dmesg) = self.target.run("dmesg")
         (status, dmesg2) = self.target.run("echo \""+str(dmesg)+"\" > /tmp/dmesg_output.log")
 
+    @testcase(1059)
     @skipUnlessPassed('test_ssh')
     def test_parselogs(self):
         self.write_dmesg()
-        log_list = self.getLogList(self.log_locations)
+        log_list = self.get_local_log_list(self.log_locations)
         result = self.parse_logs(self.errors, self.ignore_errors, log_list)
         print self.getHardwareInfo()
         errcount = 0

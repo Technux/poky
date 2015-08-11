@@ -8,7 +8,9 @@ PR = "r33"
 
 PACKAGE_ARCH = "${MACHINE_ARCH}"
 
-inherit packagegroup
+inherit packagegroup distro_features_check
+# rdepends on x11vnc
+REQUIRED_DISTRO_FEATURES = "x11"
 
 PACKAGES = "${PN} ${PN}-base ${PN}-apps ${PN}-games"
 
@@ -37,6 +39,8 @@ RDEPENDS_${PN}-base = "\
     libsdl \
     ${NETWORK_MANAGER} \
     udev-extraconf \
+    pulseaudio-server \
+    pulseaudio-client-conf-sato \
     "
 
 # pcmanfm doesn't work on mips
@@ -49,7 +53,7 @@ WEB ?= ""
 SUMMARY_${PN}-apps = "Sato desktop - applications"
 RDEPENDS_${PN}-apps = "\
     leafpad \
-    gaku \
+    gst-player-bin \
     x11vnc \
     matchbox-terminal \
     sato-screenshot \

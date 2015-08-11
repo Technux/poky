@@ -75,7 +75,7 @@ python do_package_deb () {
             pkgname = pkg
         localdata.setVar('PKG', pkgname)
 
-        localdata.setVar('OVERRIDES', pkg)
+        localdata.setVar('OVERRIDES', d.getVar("OVERRIDES", False) + ":" + pkg)
 
         bb.data.update_data(localdata)
         basedir = os.path.join(os.path.dirname(root))
@@ -87,7 +87,7 @@ python do_package_deb () {
         cleanupcontrol(root)
         from glob import glob
         g = glob('*')
-        if not g and localdata.getVar('ALLOW_EMPTY') != "1":
+        if not g and localdata.getVar('ALLOW_EMPTY', False) != "1":
             bb.note("Not creating empty archive for %s-%s-%s" % (pkg, localdata.getVar('PKGV', True), localdata.getVar('PKGR', True)))
             bb.utils.unlockfile(lf)
             continue
@@ -144,7 +144,7 @@ python do_package_deb () {
         try:
             for (c, fs) in fields:
                 for f in fs:
-                     if localdata.getVar(f) is None:
+                     if localdata.getVar(f, False) is None:
                          raise KeyError(f)
                 # Special behavior for description...
                 if 'DESCRIPTION' in fs:
@@ -215,7 +215,8 @@ python do_package_deb () {
                         del rrecommends[dep]
         rsuggests = bb.utils.explode_dep_versions2(localdata.getVar("RSUGGESTS", True) or "")
         debian_cmp_remap(rsuggests)
-        rprovides = bb.utils.explode_dep_versions2(localdata.getVar("RPROVIDES", True) or "")
+        # Deliberately drop version information here, not wanted/supported by deb
+        rprovides = dict.fromkeys(bb.utils.explode_dep_versions2(localdata.getVar("RPROVIDES", True) or ""), [])
         debian_cmp_remap(rprovides)
         rreplaces = bb.utils.explode_dep_versions2(localdata.getVar("RREPLACES", True) or "")
         debian_cmp_remap(rreplaces)
@@ -262,7 +263,7 @@ python do_package_deb () {
             scriptfile.close()
             os.chmod(os.path.join(controldir, script), 0755)
 
-        conffiles_str = localdata.getVar("CONFFILES", True)
+        conffiles_str = ' '.join(get_conffiles(pkg, d))
         if conffiles_str:
             try:
                 conffiles = open(os.path.join(controldir, 'conffiles'), 'w')

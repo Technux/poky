@@ -10,6 +10,8 @@ def process_file_linux(cmd, fpath, rootdir, baseprefix, tmpdir, d):
     if p.returncode != 0:
         return
 
+    # Handle RUNPATH as well as RPATH
+    err = err.replace("RUNPATH=","RPATH=")
     # Throw away everything other than the rpath list
     curr_rpath = err.partition("RPATH=")[2]
     #bb.note("Current rpath for %s is %s" % (fpath, curr_rpath.strip()))
@@ -62,7 +64,7 @@ def process_dir (rootdir, directory, d):
 
     rootdir = os.path.normpath(rootdir)
     cmd = d.expand('${CHRPATH_BIN}')
-    tmpdir = os.path.normpath(d.getVar('TMPDIR'))
+    tmpdir = os.path.normpath(d.getVar('TMPDIR', False))
     baseprefix = os.path.normpath(d.expand('${base_prefix}'))
     hostos = d.getVar("HOST_OS", True)
 

@@ -31,6 +31,7 @@ import subprocess
 import glob
 import traceback
 import errno
+import signal
 from commands import getstatusoutput
 from contextlib import contextmanager
 
@@ -52,6 +53,9 @@ def set_context(ctx):
 
 # Context used in better_exec, eval
 _context = clean_context()
+
+class VersionStringException(Exception):
+    """Exception raised when an invalid version specification is found"""
 
 def explode_version(s):
     r = []
@@ -128,6 +132,28 @@ def vercmp_string(a, b):
     tb = split_version(b)
     return vercmp(ta, tb)
 
+def vercmp_string_op(a, b, op):
+    """
+    Compare two versions and check if the specified comparison operator matches the result of the comparison.
+    This function is fairly liberal about what operators it will accept since there are a variety of styles
+    depending on the context.
+    """
+    res = vercmp_string(a, b)
+    if op in ('=', '=='):
+        return res == 0
+    elif op == '<=':
+        return res <= 0
+    elif op == '>=':
+        return res >= 0
+    elif op in ('>', '>>'):
+        return res > 0
+    elif op in ('<', '<<'):
+        return res < 0
+    elif op == '!=':
+        return res != 0
+    else:
+        raise VersionStringException('Unsupported comparison operator "%s"' % op)
+
 def explode_deps(s):
     """
     Take an RDEPENDS style string of format:
@@ -188,6 +214,7 @@ def explode_dep_versions2(s):
                 i = i[1:]
             else:
                 # This is an unsupported case!
+                raise VersionStringException('Invalid version specification in "(%s" - invalid or missing operator' % i)
                 lastcmp = (i or "")
                 i = ""
             i.strip()
@@ -386,10 +413,30 @@ def fileslocked(files):
     for lock in locks:
         bb.utils.unlockfile(lock)
 
-def lockfile(name, shared=False, retry=True):
+@contextmanager
+def timeout(seconds):
+    def timeout_handler(signum, frame):
+        pass
+
+    original_handler = signal.signal(signal.SIGALRM, timeout_handler)
+
+    try:
+        signal.alarm(seconds)
+        yield
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, original_handler)
+
+def lockfile(name, shared=False, retry=True, block=False):
     """
-    Use the file fn as a lock file, return when the lock has been acquired.
-    Returns a variable to pass to unlockfile().
+    Use the specified file as a lock file, return when the lock has
+    been acquired. Returns a variable to pass to unlockfile().
+    Parameters:
+        retry: True to re-try locking if it fails, False otherwise
+        block: True to block until the lock succeeds, False otherwise
+    The retry and block parameters are kind of equivalent unless you
+    consider the possibility of sending a signal to the process to break
+    out - at which point you want block=True rather than retry=True.
     """
     dirname = os.path.dirname(name)
     mkdirhier(dirname)
@@ -402,7 +449,7 @@ def lockfile(name, shared=False, retry=True):
     op = fcntl.LOCK_EX
     if shared:
         op = fcntl.LOCK_SH
-    if not retry:
+    if not retry and not block:
         op = op | fcntl.LOCK_NB
 
     while True:
@@ -575,11 +622,30 @@ def build_environment(d):
         if export:
             os.environ[var] = d.getVar(var, True) or ""
 
+def _check_unsafe_delete_path(path):
+    """
+    Basic safeguard against recursively deleting something we shouldn't. If it returns True,
+    the caller should raise an exception with an appropriate message.
+    NOTE: This is NOT meant to be a security mechanism - just a guard against silly mistakes
+    with potentially disastrous results.
+    """
+    extra = ''
+    # HOME might not be /home/something, so in case we can get it, check against it
+    homedir = os.environ.get('HOME', '')
+    if homedir:
+        extra = '|%s' % homedir
+    if re.match('(/|//|/home|/home/[^/]*%s)$' % extra, os.path.abspath(path)):
+        return True
+    return False
+
 def remove(path, recurse=False):
     """Equivalent to rm -f or rm -rf"""
     if not path:
         return
     if recurse:
+        for name in glob.glob(path):
+            if _check_unsafe_delete_path(path):
+                raise Exception('bb.utils.remove: called with dangerous path "%s" and recurse=True, refusing to delete!' % path)
         # shutil.rmtree(name) would be ideal but its too slow
         subprocess.call(['rm', '-rf'] + glob.glob(path))
         return
@@ -593,6 +659,8 @@ def remove(path, recurse=False):
 def prunedir(topdir):
     # Delete everything reachable from the directory named in 'topdir'.
     # CAUTION:  This is dangerous!
+    if _check_unsafe_delete_path(topdir):
+        raise Exception('bb.utils.prunedir: called with dangerous path "%s", refusing to delete!' % topdir)
     for root, dirs, files in os.walk(topdir, topdown = False):
         for name in files:
             os.remove(os.path.join(root, name))
@@ -861,11 +929,17 @@ def cpu_count():
 def nonblockingfd(fd):
     fcntl.fcntl(fd, fcntl.F_SETFL, fcntl.fcntl(fd, fcntl.F_GETFL) | os.O_NONBLOCK)
 
-def process_profilelog(fn):
-    pout = open(fn + '.processed', 'w')
+def process_profilelog(fn, pout = None):
+    # Either call with a list of filenames and set pout or a filename and optionally pout.
+    if not pout:
+        pout = fn + '.processed'
+    pout = open(pout, 'w')
    
     import pstats
-    p = pstats.Stats(fn, stream=pout)
+    if isinstance(fn, list):
+        p = pstats.Stats(*fn, stream=pout)
+    else:
+        p = pstats.Stats(fn, stream=pout)
     p.sort_stats('time')
     p.print_stats()
     p.print_callers()
@@ -916,77 +990,207 @@ def exec_flat_python_func(func, *args, **kwargs):
     bb.utils.better_exec(comp, context, code, '<string>')
     return context['retval']
 
-def edit_metadata_file(meta_file, variables, func):
-    """Edit a recipe or config file and modify one or more specified
-    variable values set in the file using a specified callback function.
-    The file is only written to if the value(s) actually change.
+def edit_metadata(meta_lines, variables, varfunc, match_overrides=False):
+    """Edit lines from a recipe or config file and modify one or more
+    specified variable values set in the file using a specified callback
+    function. Lines are expected to have trailing newlines.
+    Parameters:
+        meta_lines: lines from the file; can be a list or an iterable
+            (e.g. file pointer)
+        variables: a list of variable names to look for. Functions
+            may also be specified, but must be specified with '()' at
+            the end of the name. Note that the function doesn't have
+            any intrinsic understanding of _append, _prepend, _remove,
+            or overrides, so these are considered as part of the name.
+            These values go into a regular expression, so regular
+            expression syntax is allowed.
+        varfunc: callback function called for every variable matching
+            one of the entries in the variables parameter. The function
+            should take four arguments:
+                varname: name of variable matched
+                origvalue: current value in file
+                op: the operator (e.g. '+=')
+                newlines: list of lines up to this point. You can use
+                    this to prepend lines before this variable setting
+                    if you wish.
+            and should return a three-element tuple:
+                newvalue: new value to substitute in, or None to drop
+                    the variable setting entirely. (If the removal
+                    results in two consecutive blank lines, one of the
+                    blank lines will also be dropped).
+                newop: the operator to use - if you specify None here,
+                    the original operation will be used.
+                indent: number of spaces to indent multi-line entries,
+                    or -1 to indent up to the level of the assignment
+                    and opening quote, or a string to use as the indent.
+                minbreak: True to allow the first element of a
+                    multi-line value to continue on the same line as
+                    the assignment, False to indent before the first
+                    element.
+        match_overrides: True to match items with _overrides on the end,
+            False otherwise
+    Returns a tuple:
+        updated:
+            True if changes were made, False otherwise.
+        newlines:
+            Lines after processing
     """
+
     var_res = {}
+    if match_overrides:
+        override_re = '(_[a-zA-Z0-9-_$(){}]+)?'
+    else:
+        override_re = ''
     for var in variables:
-        var_res[var] = re.compile(r'^%s[ \t]*[?+]*=' % var)
+        if var.endswith('()'):
+            var_res[var] = re.compile('^(%s%s)[ \\t]*\([ \\t]*\)[ \\t]*{' % (var[:-2].rstrip(), override_re))
+        else:
+            var_res[var] = re.compile('^(%s%s)[ \\t]*[?+:.]*=[+.]*[ \\t]*(["\'])' % (var, override_re))
 
     updated = False
     varset_start = ''
+    varlines = []
     newlines = []
     in_var = None
     full_value = ''
+    var_end = ''
 
     def handle_var_end():
-        (newvalue, indent, minbreak) = func(in_var, full_value)
-        if newvalue != full_value:
-            if isinstance(newvalue, list):
-                intentspc = ' ' * indent
-                if minbreak:
-                    # First item on first line
-                    if len(newvalue) == 1:
-                        newlines.append('%s "%s"\n' % (varset_start, newvalue[0]))
+        prerun_newlines = newlines[:]
+        op = varset_start[len(in_var):].strip()
+        (newvalue, newop, indent, minbreak) = varfunc(in_var, full_value, op, newlines)
+        changed = (prerun_newlines != newlines)
+
+        if newvalue is None:
+            # Drop the value
+            return True
+        elif newvalue != full_value or (newop not in [None, op]):
+            if newop not in [None, op]:
+                # Callback changed the operator
+                varset_new = "%s %s" % (in_var, newop)
+            else:
+                varset_new = varset_start
+
+            if isinstance(indent, (int, long)):
+                if indent == -1:
+                    indentspc = ' ' * (len(varset_new) + 2)
+                else:
+                    indentspc = ' ' * indent
+            else:
+                indentspc = indent
+            if in_var.endswith('()'):
+                # A function definition
+                if isinstance(newvalue, list):
+                    newlines.append('%s {\n%s%s\n}\n' % (varset_new, indentspc, ('\n%s' % indentspc).join(newvalue)))
+                else:
+                    if not newvalue.startswith('\n'):
+                        newvalue = '\n' + newvalue
+                    if not newvalue.endswith('\n'):
+                        newvalue = newvalue + '\n'
+                    newlines.append('%s {%s}\n' % (varset_new, newvalue))
+            else:
+                # Normal variable
+                if isinstance(newvalue, list):
+                    if not newvalue:
+                        # Empty list -> empty string
+                        newlines.append('%s ""\n' % varset_new)
+                    elif minbreak:
+                        # First item on first line
+                        if len(newvalue) == 1:
+                            newlines.append('%s "%s"\n' % (varset_new, newvalue[0]))
+                        else:
+                            newlines.append('%s "%s \\\n' % (varset_new, newvalue[0]))
+                            for item in newvalue[1:]:
+                                newlines.append('%s%s \\\n' % (indentspc, item))
+                            newlines.append('%s"\n' % indentspc)
                     else:
-                        newlines.append('%s "%s\\\n' % (varset_start, newvalue[0]))
-                        for item in newvalue[1:]:
-                            newlines.append('%s%s \\\n' % (intentspc, item))
+                        # No item on first line
+                        newlines.append('%s " \\\n' % varset_new)
+                        for item in newvalue:
+                            newlines.append('%s%s \\\n' % (indentspc, item))
                         newlines.append('%s"\n' % indentspc)
                 else:
-                    # No item on first line
-                    newlines.append('%s " \\\n' % varset_start)
-                    for item in newvalue:
-                        newlines.append('%s%s \\\n' % (intentspc, item))
-                    newlines.append('%s"\n' % intentspc)
-            else:
-                newlines.append('%s "%s"\n' % (varset_start, newvalue))
+                    newlines.append('%s "%s"\n' % (varset_new, newvalue))
             return True
-        return False
+        else:
+            # Put the old lines back where they were
+            newlines.extend(varlines)
+            # If newlines was touched by the function, we'll need to return True
+            return changed
 
-    with open(meta_file, 'r') as f:
-        for line in f:
-            if in_var:
-                value = line.rstrip()
-                full_value += value[:-1]
-                if value.endswith('"') or value.endswith("'"):
-                    if handle_var_end():
-                        updated = True
-                    in_var = None
+    checkspc = False
+
+    for line in meta_lines:
+        if in_var:
+            value = line.rstrip()
+            varlines.append(line)
+            if in_var.endswith('()'):
+                full_value += '\n' + value
             else:
-                matched = False
-                for (varname, var_re) in var_res.iteritems():
-                    if var_re.match(line):
-                        splitvalue = line.split('"', 1)
-                        varset_start = splitvalue[0].rstrip()
-                        value = splitvalue[1].rstrip()
-                        if value.endswith('\\'):
-                            value = value[:-1]
-                        full_value = value
-                        if value.endswith('"') or value.endswith("'"):
-                            if handle_var_end():
-                                updated = True
-                        else:
-                            in_var = varname
-                        matched = True
-                        break
-                if not matched:
-                    newlines.append(line)
+                full_value += value[:-1]
+            if value.endswith(var_end):
+                if in_var.endswith('()'):
+                    if full_value.count('{') - full_value.count('}') >= 0:
+                        continue
+                full_value = full_value[:-1]
+                if handle_var_end():
+                    updated = True
+                    checkspc = True
+                in_var = None
+        else:
+            skip = False
+            for (varname, var_re) in var_res.iteritems():
+                res = var_re.match(line)
+                if res:
+                    isfunc = varname.endswith('()')
+                    if isfunc:
+                        splitvalue = line.split('{', 1)
+                        var_end = '}'
+                    else:
+                        var_end = res.groups()[-1]
+                        splitvalue = line.split(var_end, 1)
+                    varset_start = splitvalue[0].rstrip()
+                    value = splitvalue[1].rstrip()
+                    if not isfunc and value.endswith('\\'):
+                        value = value[:-1]
+                    full_value = value
+                    varlines = [line]
+                    in_var = res.group(1)
+                    if isfunc:
+                        in_var += '()'
+                    if value.endswith(var_end):
+                        full_value = full_value[:-1]
+                        if handle_var_end():
+                            updated = True
+                            checkspc = True
+                        in_var = None
+                    skip = True
+                    break
+            if not skip:
+                if checkspc:
+                    checkspc = False
+                    if newlines[-1] == '\n' and line == '\n':
+                        # Squash blank line if there are two consecutive blanks after a removal
+                        continue
+                newlines.append(line)
+    return (updated, newlines)
+
+
+def edit_metadata_file(meta_file, variables, varfunc):
+    """Edit a recipe or config file and modify one or more specified
+    variable values set in the file using a specified callback function.
+    The file is only written to if the value(s) actually change.
+    This is basically the file version of edit_metadata(), see that
+    function's description for parameter/usage information.
+    Returns True if the file was written to, False otherwise.
+    """
+    with open(meta_file, 'r') as f:
+        (updated, newlines) = edit_metadata(f, variables, varfunc)
     if updated:
         with open(meta_file, 'w') as f:
             f.writelines(newlines)
+    return updated
+
 
 def edit_bblayers_conf(bblayers_conf, add, remove):
     """Edit bblayers.conf, adding and/or removing layers"""
@@ -1015,7 +1219,7 @@ def edit_bblayers_conf(bblayers_conf, add, remove):
     # Need to use a list here because we can't set non-local variables from a callback in python 2.x
     bblayercalls = []
 
-    def handle_bblayers(varname, origvalue):
+    def handle_bblayers(varname, origvalue, op, newlines):
         bblayercalls.append(varname)
         updated = False
         bblayers = [remove_trailing_sep(x) for x in origvalue.split()]
@@ -1039,9 +1243,9 @@ def edit_bblayers_conf(bblayers_conf, add, remove):
                     notadded.append(addlayer)
 
         if updated:
-            return (bblayers, 2, False)
+            return (bblayers, None, 2, False)
         else:
-            return (origvalue, 2, False)
+            return (origvalue, None, 2, False)
 
     edit_metadata_file(bblayers_conf, ['BBLAYERS'], handle_bblayers)
 
@@ -1050,3 +1254,19 @@ def edit_bblayers_conf(bblayers_conf, add, remove):
 
     return (notadded, notremoved)
 
+
+def get_file_layer(filename, d):
+    """Determine the collection (as defined by a layer's layer.conf file) containing the specified file"""
+    collections = (d.getVar('BBFILE_COLLECTIONS', True) or '').split()
+    collection_res = {}
+    for collection in collections:
+        collection_res[collection] = d.getVar('BBFILE_PATTERN_%s' % collection, True) or ''
+
+    # Use longest path so we handle nested layers
+    matchlen = 0
+    match = None
+    for collection, regex in collection_res.iteritems():
+        if len(regex) > matchlen and re.match(regex, filename):
+            matchlen = len(regex)
+            match = collection
+    return match

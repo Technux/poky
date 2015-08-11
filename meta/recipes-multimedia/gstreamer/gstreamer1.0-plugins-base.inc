@@ -12,7 +12,7 @@ PACKAGES_DYNAMIC =+ "^libgst.*"
 PACKAGECONFIG ??= " \
     ${@bb.utils.contains('DISTRO_FEATURES', 'x11', 'x11', '', d)} \
     ${@bb.utils.contains('DISTRO_FEATURES', 'alsa', 'alsa', '', d)} \
-    orc ivorbis ogg theora vorbis \
+    orc ivorbis ogg theora vorbis pango \
     "
 
 X11DEPENDS = "virtual/libx11 libsm libxrender"
@@ -35,6 +35,6 @@ EXTRA_OECONF += " \
     ${GSTREAMER_1_0_ORC} \
 "
 
-FILES_${PN} += "${datadir}/gst-plugins-base"
+FILES_${MLPREFIX}libgsttag-1.0 += "${datadir}/gst-plugins-base/1.0/license-translations.dict"
 
-CACHED_CONFIGUREVARS_append_i586 = " ac_cv_header_emmintrin_h=no ac_cv_header_xmmintrin_h=no"
+CACHED_CONFIGUREVARS_append_x86 = " ac_cv_header_emmintrin_h=no ac_cv_header_xmmintrin_h=no"

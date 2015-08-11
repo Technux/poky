@@ -2,9 +2,14 @@
 .logo img { height: 30px; width: auto !important; }
 .logo { padding-top: 4px !important; padding-bottom:0px !important; }
 
+/* style the version information */
+.brand > a { color: #777; }
+.brand > a:hover { color: #999; text-decoration: none; }
+.icon-info-sign { color: #777; font-size: 16px; margin-left: 5px;}
+.icon-info-sign:hover { color: #999; cursor: pointer; }
+
 /* Style the breadcrumb */
 .breadcrumb { display: inline-block; background-color: transparent; }
-.section { margin: 20px 0; }
 
 /* Styles for the help information */
 .get-help { color: #CCCCCC; }
@@ -15,8 +20,8 @@
 .get-help-yellow:hover { color: #B38942; cursor: pointer; }
 .get-help-red { color: #B94A48; font-size: 16px; padding-left: 2px; }
 .get-help-red:hover { color: #943A38; cursor: pointer; }
-.build-form .get-help { margin-left: 5px; }
-.manual { margin: 11px 15px;}
+.build-form>i:first-of-type { margin-left: 5px; }
+.manual { margin: 11px 15px 0 11px;}
 .heading-help { font-size: 14px; }
 
 /* Styles for the external link */
@@ -30,7 +35,7 @@ dd code, .alert code { white-space: pre-wrap; word-break: break-all; word-wrap: 
 .alert-error code { background-color: transparent; border: none; color: #B94A48; margin-bottom:0px; }
 .alert-error pre { background-color: transparent; border: none; color: #B94A48; word-break: normal; margin-bottom: 0px; }
 .alert-warning pre { word-break: normal; }
-.alert-info a { font-weight: bold; }
+.alert-info a { font-weight: 300; }
 .alert-info code { color: #3A87AD; }
 .tooltip code { background-color: transparent; color: #FFFFFF; font-weight: normal; border: none; font-size: 1em; }
 
@@ -38,7 +43,7 @@ dd code, .alert code { white-space: pre-wrap; word-break: break-all; word-wrap: 
 dd ul { list-style-type: none; margin: 0px; }
 dt, dd  {line-height: 25px; }
 dd li { line-height: 25px; }
-dd p { line-height: 20px; }
+.item-info dd { line-height: 20px; margin-bottom: 10px; }
 
 /* Style the filter modal dialogs */
 .modal { width: 800px; margin-left: -400px; }
@@ -114,6 +119,7 @@ select { width: auto; }
 .top-air { margin-top: 40px;}
 .progress { margin-bottom: 0px; }
 .lead .badge { font-size: 18px; font-weight: normal; border-radius: 15px; padding: 9px; }
+.lead ol, .lead ul { padding: 10px 0 0 20px; }
 .lead ol > li, .lead ul > li {
     line-height: 35px;
 }
@@ -123,13 +129,22 @@ select { width: auto; }
 .task-name { margin-left: 7px; }
 .icon-hand-right {color: #CCCCCC; }
 .help-inline { margin: 5px; }
+.dashboard-section { background-color: transparent; }
+
+/* styles for landing page - analysis mode */
 .hero-unit { margin: 20px 0 30px; }
 .hero-unit > .close { font-size:40px; }
 .hero-actions { margin-top: 30px; }
-.dashboard-section { background-color: transparent; }
+
+/* styles for landing page - build mode */
+.hero-unit p { line-height: 25px; }
+.hero-unit p, .hero-unit .btn-large { margin-top: 15px; }
+.hero-unit ul { margin-top: 20px; }
+.hero-unit li { line-height: 30px; }
+.hero-unit img { background-color: #eee; margin-top: 15px; }
 
 /* make tables Chrome-happy (me, not so much) */
-#otable { table-layout: fixed; word-wrap: break-word; }
+table { table-layout: fixed; word-wrap: break-word; }
 
 /* styles for the new build button */
 .new-build .btn-primary { padding: 4px 30px; }
@@ -139,14 +154,15 @@ select { width: auto; }
 /* styles for showing the project name in build mode */
 .project-name { padding-top: 0; }
 .project-name .label { font-weight: normal; margin-bottom: 5px; margin-left: -15px; padding: 5px; }
+.project-name .label > a { color: #fff; font-weight: normal; }
 
 /* Remove bottom margin for forms inside modal dialogs */
-#dependencies_modal_form { margin-bottom: 0px; }
+#dependencies-modal-form { margin-bottom: 0px; }
 
 /* Configuration styles */
-.icon-trash { color: #B94A48; font-size: 16px; padding-left: 2px; }
+.icon-trash { color: #B94A48; font-size: 16px; padding-left: 5px; }
 .icon-trash:hover { color: #943A38; text-decoration: none; cursor: pointer; }
-.icon-pencil, .icon-download-alt, .icon-refresh, .icon-star-empty, .icon-star, .icon-tasks { font-size: 16px; color: #0088CC; padding-left: 2px; }
+.icon-pencil, .icon-download-alt, .icon-refresh, .icon-star-empty, .icon-star  { font-size: 16px; color: #0088CC; padding-left: 2px; }
 .icon-pencil:hover, .icon-download-alt:hover, .icon-refresh:hover, .icon-star-empty:hover, .icon-star:hover, .icon-tasks:hover { color: #005580; text-decoration: none; cursor: pointer; }
 .icon-share { padding-left: 2px; }
 .alert-success .icon-refresh, .alert-success .icon-tasks { color: #468847; }
@@ -162,7 +178,6 @@ select { width: auto; }
 .well-alert > .lead { color: #C09853; padding-bottom: .75em; }
 .configuration-alert { margin-bottom: 0px; padding: 8px 14px; }
 .configuration-alert p { margin-bottom: 0px; }
-fieldset { padding-left: 19px; }
 .project-form { margin-top: 10px; }
 .add-layers .btn-block + .btn-block, .build .btn-block + .btn-block { margin-top: 0px; }
 input.huge { font-size: 17.5px; padding: 11px 19px; }
@@ -184,7 +199,6 @@ a code:hover { color: #005580; }
 .control-group { margin-bottom: 0px; }
 #project-details form { margin: 0px; }
 dd form { margin: 10px 0 0 0; }
-dd form { margin-bottom: 0px; }
 dl textarea { resize: vertical; }
 .navbar-fixed-top {  z-index: 1; }
 .popover { z-index: 2; }
@@ -200,7 +214,6 @@ dl textarea { resize: vertical; }
 .lead .help-block { font-size: 14px; line-height: 20px; font-weight: normal; }
 .button-place  .btn { margin: 0 0 20px 0; }
 .tooltip-inner { max-width: 250px; }
-dd > span { line-height: 20px; }
 .new-build { padding: 20px; }
 .new-build li { line-height: 30px; }
 .new-build h6 { margin: 10px 0 0 0; color: #5a5a5a; }
@@ -208,6 +221,8 @@ dd > span { line-height: 20px; }
 .new-build form { margin: 5px 0 0; }
 .new-build .input-append { margin-bottom: 0; }
 #build-selected { margin-top: 15px; }
+div.add-deps { margin-top: 15px; }
+.btn.log { margin-left: 20px; }
 
 
 .animate-repeat {
@@ -231,4 +246,79 @@ dd > span { line-height: 20px; }
 .animate-repeat.ng-leave,
 .animate-repeat.ng-enter.ng-enter-active {
   opacity:1;
+}
+
+.tab-pane table { margin-top: 10px; }
+
+thead .description, .get_description_or_summary { width: 364px; }
+thead .add-del-layers { width: 124px; }
+
+#loading-notification {
+  position: fixed;
+  z-index: 101;
+  top: 3%;
+  left: 40%;
+  right: 40%;
+  -webkit-box-shadow: 0 0 10px #c09853;
+  -moz-box-shadow: 0 0 10px #c09853;
+  box-shadow: 0 0 10px #c09853;
+}
+
+#change-notification {
+  position: fixed;
+  z-index: 101;
+  top: 3%;
+  left: 20%;
+  right: 20%;
+  -webkit-box-shadow: 0 0 10px #3a87ad;
+  -moz-box-shadow: 0 0 10px #3a87ad;
+  box-shadow: 0 0 10px #3a87ad;
+}
+
+/* Copied in from newer version of Font-Awesome 4.3.0 */
+.fa-spin {
+  -webkit-animation: fa-spin 2s infinite linear;
+  animation: fa-spin 2s infinite linear;
+  display: inline-block;
+}
+.fa-pulse {
+  -webkit-animation: fa-spin 1s infinite steps(8);
+  animation: fa-spin 1s infinite steps(8);
+  display: inline-block;
+}
+
+@-webkit-keyframes fa-spin {
+  0% {
+    -webkit-transform: rotate(0deg);
+    transform: rotate(0deg);
+  }
+  100% {
+    -webkit-transform: rotate(359deg);
+    transform: rotate(359deg);
+  }
+}
+
+@keyframes fa-spin {
+  0% {
+    -webkit-transform: rotate(0deg);
+    -moz-transform: rotate(0deg);
+    transform: rotate(0deg);
+  }
+  100% {
+    -webkit-transform: rotate(359deg);
+    -moz-transform: rotate(359deg);
+    transform: rotate(359deg);
+  }
+}
+/* End copied in from newer version of Font-Awesome 4.3.0 */
+
+.top-padded {
+  padding-top: 60px;
+}
+
+input.input-lg {
+  font-size: 18px;
+  height: 22px;
+  line-height: 1.33333;
+  padding: 10px 16px;
 }

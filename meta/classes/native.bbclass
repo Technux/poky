@@ -132,13 +132,17 @@ python native_virtclass_handler () {
         deps = bb.utils.explode_deps(deps)
         newdeps = []
         for dep in deps:
-            if "-cross-" in dep:
+            if dep == pn:
+                continue
+            elif "-cross-" in dep:
                 newdeps.append(dep.replace("-cross", "-native"))
             elif not dep.endswith("-native"):
                 newdeps.append(dep + "-native")
             else:
                 newdeps.append(dep)
         d.setVar(varname, " ".join(newdeps))
+
+    e.data.setVar("OVERRIDES", e.data.getVar("OVERRIDES", False) + ":virtclass-native")
 
     map_dependencies("DEPENDS", e.data)
     for pkg in [e.data.getVar("PN", True), "", "${PN}"]:
@@ -149,14 +153,17 @@ python native_virtclass_handler () {
         map_dependencies("RREPLACES", e.data, pkg)
 
     provides = e.data.getVar("PROVIDES", True)
+    nprovides = []
     for prov in provides.split():
         if prov.find(pn) != -1:
-            continue
-        if not prov.endswith("-native"):
-            provides = provides.replace(prov, prov + "-native")
-    e.data.setVar("PROVIDES", provides)
+            nprovides.append(prov)
+        elif not prov.endswith("-native"):
+            nprovides.append(prov.replace(prov, prov + "-native"))
+        else:
+            nprovides.append(prov)
+    e.data.setVar("PROVIDES", ' '.join(nprovides))
 
-    e.data.setVar("OVERRIDES", e.data.getVar("OVERRIDES", False) + ":virtclass-native")
+
 }
 
 addhandler native_virtclass_handler

@@ -52,14 +52,12 @@ do_ar_original[dirs] = "${ARCHIVER_OUTDIR} ${ARCHIVER_WORKDIR}"
 python () {
     pn = d.getVar('PN', True)
 
-    if d.getVar('COPYLEFT_LICENSE_INCLUDE', True) or \
-            d.getVar('COPYLEFT_LICENSE_EXCLUDE', True):
-        included, reason = copyleft_should_include(d)
-        if not included:
-            bb.debug(1, 'archiver: %s is excluded: %s' % (pn, reason))
-            return
-        else:
-            bb.debug(1, 'archiver: %s is included: %s' % (pn, reason))
+    included, reason = copyleft_should_include(d)
+    if not included:
+        bb.debug(1, 'archiver: %s is excluded: %s' % (pn, reason))
+        return
+    else:
+        bb.debug(1, 'archiver: %s is included: %s' % (pn, reason))
 
     ar_src = d.getVarFlag('ARCHIVER_MODE', 'src', True)
     ar_dumpdata = d.getVarFlag('ARCHIVER_MODE', 'dumpdata', True)
@@ -376,3 +374,10 @@ addtask do_ar_configured after do_unpack_and_patch
 addtask do_dumpdata
 addtask do_ar_recipe
 addtask do_deploy_archives before do_build
+
+addtask do_deploy_all_archives after do_deploy_archives
+do_deploy_all_archives[recrdeptask] = "do_deploy_archives"
+do_deploy_all_archives[recideptask] = "do_${BB_DEFAULT_TASK}"
+do_deploy_all_archives() {
+        :
+}

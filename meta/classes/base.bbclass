@@ -47,7 +47,7 @@ def lsb_distro_identifier(d):
     return oe.lsb.distro_identifier(adjust_func)
 
 die() {
-	bbfatal "$*"
+	bbfatal_log "$*"
 }
 
 oe_runmake_call() {
@@ -71,7 +71,7 @@ def base_dep_prepend(d):
     # INHIBIT_DEFAULT_DEPS doesn't apply to the patch command.  Whether or  not
     # we need that built is the responsibility of the patch function / class, not
     # the application.
-    if not d.getVar('INHIBIT_DEFAULT_DEPS'):
+    if not d.getVar('INHIBIT_DEFAULT_DEPS', False):
         if (d.getVar('HOST_SYS', True) != d.getVar('BUILD_SYS', True)):
             deps += " virtual/${TARGET_PREFIX}gcc virtual/${TARGET_PREFIX}compilerlibs virtual/libc "
     return deps
@@ -94,9 +94,29 @@ def extra_path_elements(d):
 
 PATH_prepend = "${@extra_path_elements(d)}"
 
+def get_lic_checksum_file_list(d):
+    filelist = []
+    lic_files = d.getVar("LIC_FILES_CHKSUM", True) or ''
+    tmpdir = d.getVar("TMPDIR", True)
+
+    urls = lic_files.split()
+    for url in urls:
+        # We only care about items that are absolute paths since
+        # any others should be covered by SRC_URI.
+        try:
+            path = bb.fetch.decodeurl(url)[2]
+            if path[0] == '/':
+                if path.startswith(tmpdir):
+                    continue
+                filelist.append(path + ":" + str(os.path.exists(path)))
+        except bb.fetch.MalformedUrl:
+            raise bb.build.FuncFailed(d.getVar('PN', True) + ": LIC_FILES_CHKSUM contains an invalid URL: " + url)
+    return " ".join(filelist)
+
 addtask fetch
 do_fetch[dirs] = "${DL_DIR}"
 do_fetch[file-checksums] = "${@bb.fetch.get_checksum_file_list(d)}"
+do_fetch[file-checksums] += " ${@get_lic_checksum_file_list(d)}"
 do_fetch[vardeps] += "SRCREV"
 python base_do_fetch() {
 
@@ -113,13 +133,19 @@ python base_do_fetch() {
 
 addtask unpack after do_fetch
 do_unpack[dirs] = "${WORKDIR}"
-do_unpack[cleandirs] = "${S}/patches"
 python base_do_unpack() {
     src_uri = (d.getVar('SRC_URI', True) or "").split()
     if len(src_uri) == 0:
         return
 
     rootdir = d.getVar('WORKDIR', True)
+
+    # Ensure that we cleanup ${S}/patches
+    # TODO: Investigate if we can remove
+    # the entire ${S} in this case.
+    s_dir = d.getVar('S', True)
+    p_dir = os.path.join(s_dir, 'patches')
+    bb.utils.remove(p_dir, True)
 
     try:
         fetcher = bb.fetch2.Fetch(src_uri, d)
@@ -178,10 +204,13 @@ def buildcfg_neededvars(d):
         bb.fatal('The following variable(s) were not set: %s\nPlease set them directly, or choose a MACHINE or DISTRO that sets them.' % ', '.join(pesteruser))
 
 addhandler base_eventhandler
-base_eventhandler[eventmask] = "bb.event.ConfigParsed bb.event.BuildStarted bb.event.RecipePreFinalise"
+base_eventhandler[eventmask] = "bb.event.ConfigParsed bb.event.BuildStarted bb.event.RecipePreFinalise bb.runqueue.sceneQueueComplete"
 python base_eventhandler() {
+    import bb.runqueue
+
     if isinstance(e, bb.event.ConfigParsed):
-        e.data.setVar("NATIVELSBSTRING", lsb_distro_identifier(e.data))
+        if not e.data.getVar("NATIVELSBSTRING", False):
+            e.data.setVar("NATIVELSBSTRING", lsb_distro_identifier(e.data))
         e.data.setVar('BB_VERSION', bb.__version__)
         pkgarch_mapping(e.data)
         oe.utils.features_backfill("DISTRO_FEATURES", e.data)
@@ -214,13 +243,24 @@ python base_eventhandler() {
             e.data.delVar("PREFERRED_PROVIDER_virtual/${TARGET_PREFIX}g++")
             e.data.delVar("PREFERRED_PROVIDER_virtual/${TARGET_PREFIX}compilerlibs")
 
+    if isinstance(e, bb.runqueue.sceneQueueComplete):
+        completions = e.data.expand("${STAGING_DIR}/sstatecompletions")
+        if os.path.exists(completions):
+            cmds = set()
+            with open(completions, "r") as f:
+                cmds = set(f)
+            e.data.setVar("completion_function", "\n".join(cmds))
+            e.data.setVarFlag("completion_function", "func", "1")
+            bb.debug(1, "Executing SceneQueue Completion commands: %s" % "\n".join(cmds))
+            bb.build.exec_func("completion_function", e.data)
+            os.remove(completions)
 }
 
 CONFIGURESTAMPFILE = "${WORKDIR}/configure.sstate"
 CLEANBROKEN = "0"
 
 addtask configure after do_patch
-do_configure[dirs] = "${S} ${B}"
+do_configure[dirs] = "${B}"
 do_configure[deptask] = "do_populate_sysroot"
 base_do_configure() {
 	if [ -n "${CONFIGURESTAMPFILE}" -a -e "${CONFIGURESTAMPFILE}" ]; then
@@ -229,7 +269,7 @@ base_do_configure() {
 			if [ "${CLEANBROKEN}" != "1" -a \( -e Makefile -o -e makefile -o -e GNUmakefile \) ]; then
 				oe_runmake clean
 			fi
-			find ${B} -name \*.la -delete
+			find ${B} -ignore_readdir_race -name \*.la -delete
 		fi
 	fi
 	if [ -n "${CONFIGURESTAMPFILE}" ]; then
@@ -238,7 +278,7 @@ base_do_configure() {
 }
 
 addtask compile after do_configure
-do_compile[dirs] = "${S} ${B}"
+do_compile[dirs] = "${B}"
 base_do_compile() {
 	if [ -e Makefile -o -e makefile -o -e GNUmakefile ]; then
 		oe_runmake || die "make failed"
@@ -248,7 +288,7 @@ base_do_compile() {
 }
 
 addtask install after do_compile
-do_install[dirs] = "${D} ${S} ${B}"
+do_install[dirs] = "${D} ${B}"
 # Remove and re-create ${D} so that is it guaranteed to be empty
 do_install[cleandirs] = "${D}"
 
@@ -309,9 +349,12 @@ python () {
     # PACKAGECONFIG ??= "<default options>"
     # PACKAGECONFIG[foo] = "--enable-foo,--disable-foo,foo_depends,foo_runtime_depends"
     pkgconfigflags = d.getVarFlags("PACKAGECONFIG") or {}
+    # Remove PACKAGECONFIG[doc]
+    pkgconfigflags.pop('doc', None)
     if pkgconfigflags:
         pkgconfig = (d.getVar('PACKAGECONFIG', True) or "").split()
         pn = d.getVar("PN", True)
+
         mlprefix = d.getVar("MLPREFIX", True)
 
         def expandFilter(appends, extension, prefix):
@@ -367,22 +410,6 @@ python () {
             appendVar('EXTRA_OECMAKE', extraconf)
         else:
             appendVar('EXTRA_OECONF', extraconf)
-
-    # If PRINC is set, try and increase the PR value by the amount specified
-    # The PR server is now the preferred way to handle PR changes based on
-    # the checksum of the recipe (including bbappend).  The PRINC is now
-    # obsolete.  Return a warning to the user.
-    princ = d.getVar('PRINC', True)
-    if princ and princ != "0":
-        bb.error("Use of PRINC %s was detected in the recipe %s (or one of its .bbappends)\nUse of PRINC is deprecated.  The PR server should be used to automatically increment the PR.  See: https://wiki.yoctoproject.org/wiki/PR_Service." % (princ, d.getVar("FILE", True)))
-        pr = d.getVar('PR', True)
-        pr_prefix = re.search("\D+",pr)
-        prval = re.search("\d+",pr)
-        if pr_prefix is None or prval is None:
-            bb.error("Unable to analyse format of PR variable: %s" % pr)
-        nval = int(prval.group(0)) + int(princ)
-        pr = pr_prefix.group(0) + str(nval) + pr[prval.end():]
-        d.setVar('PR', pr)
 
     pn = d.getVar('PN', True)
     license = d.getVar('LICENSE', True)
@@ -442,17 +469,37 @@ python () {
               "-cross-canadian-${TRANSLATED_TARGET_ARCH}"]:
             if pn.endswith(d.expand(t)):
                 check_license = False
+        if pn.startswith("gcc-source-"):
+            check_license = False
 
         if check_license and bad_licenses:
             bad_licenses = expand_wildcard_licenses(d, bad_licenses)
 
             whitelist = []
+            incompatwl = []
+            htincompatwl = []
             for lic in bad_licenses:
+                spdx_license = return_spdx(d, lic)
                 for w in ["HOSTTOOLS_WHITELIST_", "LGPLv2_WHITELIST_", "WHITELIST_"]:
                     whitelist.extend((d.getVar(w + lic, True) or "").split())
-                spdx_license = return_spdx(d, lic)
-                if spdx_license:
-                    whitelist.extend((d.getVar('HOSTTOOLS_WHITELIST_%s' % spdx_license, True) or "").split())
+                    if spdx_license:
+                        whitelist.extend((d.getVar(w + spdx_license, True) or "").split())
+                    '''
+                    We need to track what we are whitelisting and why. If pn is 
+                    incompatible and is not HOSTTOOLS_WHITELIST_ we need to be 
+                    able to note that the image that is created may infact 
+                    contain incompatible licenses despite INCOMPATIBLE_LICENSE 
+                    being set.
+                    '''
+                    if "HOSTTOOLS" in w:
+                        htincompatwl.extend((d.getVar(w + lic, True) or "").split())
+                        if spdx_license:
+                            htincompatwl.extend((d.getVar(w + spdx_license, True) or "").split())
+                    else:
+                        incompatwl.extend((d.getVar(w + lic, True) or "").split())
+                        if spdx_license:
+                            incompatwl.extend((d.getVar(w + spdx_license, True) or "").split())
+
             if not pn in whitelist:
                 recipe_license = d.getVar('LICENSE', True)
                 pkgs = d.getVar('PACKAGES', True).split()
@@ -473,6 +520,11 @@ python () {
                 elif all_skipped or incompatible_license(d, bad_licenses):
                     bb.debug(1, "SKIPPING recipe %s because it's %s" % (pn, recipe_license))
                     raise bb.parse.SkipPackage("incompatible with license %s" % recipe_license)
+            elif pn in whitelist:
+                if pn in incompatwl:
+                    bb.note("INCLUDING " + pn + " as buildable despite INCOMPATIBLE_LICENSE because it has been whitelisted")
+                elif pn in htincompatwl:
+                    bb.note("INCLUDING " + pn + " as buildable despite INCOMPATIBLE_LICENSE because it has been whitelisted for HOSTTOOLS")
 
     srcuri = d.getVar('SRC_URI', True)
     # Svn packages should DEPEND on subversion-native

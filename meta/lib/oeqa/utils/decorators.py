@@ -10,22 +10,33 @@ import os
 import logging
 import sys
 import unittest
+import threading
+import signal
+from functools import wraps
 
 #get the "result" object from one of the upper frames provided that one of these upper frames is a unittest.case frame
 class getResults(object):
     def __init__(self):
         #dynamically determine the unittest.case frame and use it to get the name of the test method
-        upperf = sys._current_frames().values()[0]
+        ident = threading.current_thread().ident
+        upperf = sys._current_frames()[ident]
         while (upperf.f_globals['__name__'] != 'unittest.case'):
             upperf = upperf.f_back
-        self.faillist = [ seq[0]._testMethodName for seq in upperf.f_locals['result'].failures ]
-        self.errorlist = [ seq[0]._testMethodName for seq in upperf.f_locals['result'].errors ]
-        #ignore the _ErrorHolder objects from the skipped tests list
-        self.skiplist = []
-        for seq in upperf.f_locals['result'].skipped:
-            try:
-                self.skiplist.append(seq[0]._testMethodName)
-            except: pass
+
+        def handleList(items):
+            ret = []
+            # items is a list of tuples, (test, failure) or (_ErrorHandler(), Exception())
+            for i in items:
+                s = i[0].id()
+                #Handle the _ErrorHolder objects from skipModule failures
+                if "setUpModule (" in s:
+                    ret.append(s.replace("setUpModule (", "").replace(")",""))
+                else:
+                    ret.append(s)
+            return ret
+        self.faillist = handleList(upperf.f_locals['result'].failures)
+        self.errorlist = handleList(upperf.f_locals['result'].errors)
+        self.skiplist = handleList(upperf.f_locals['result'].skipped)
 
     def getFailList(self):
         return self.faillist
@@ -78,6 +89,7 @@ class skipUnlessPassed(object):
                 raise unittest.SkipTest("Testcase dependency not met: %s" % self.testcase)
             return f(*args)
         wrapped_f.__name__ = f.__name__
+        wrapped_f._depends_on = self.testcase
         return wrapped_f
 
 class testcase(object):
@@ -150,3 +162,27 @@ def LogResults(original_class):
 
     original_class.run = run
     return original_class
+
+class TimeOut(BaseException):
+    pass
+
+def timeout(seconds):
+    def decorator(fn):
+        if hasattr(signal, 'alarm'):
+            @wraps(fn)
+            def wrapped_f(*args, **kw):
+                current_frame = sys._getframe()
+                def raiseTimeOut(signal, frame):
+                    if frame is not current_frame:
+                        raise TimeOut('%s seconds' % seconds)
+                prev_handler = signal.signal(signal.SIGALRM, raiseTimeOut)
+                try:
+                    signal.alarm(seconds)
+                    return fn(*args, **kw)
+                finally:
+                    signal.alarm(0)
+                    signal.signal(signal.SIGALRM, prev_handler)
+            return wrapped_f
+        else:
+            return fn
+    return decorator

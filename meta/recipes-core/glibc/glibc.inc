@@ -15,12 +15,15 @@ def get_optimization(d):
     if bb.utils.contains("SELECTED_OPTIMIZATION", "-O0", "x", "", d) == "x":
         bb.note("glibc can't be built with -O0, -O2 will be used instead.")
         return selected_optimization.replace("-O0", "-O2")
+    elif bb.utils.contains("SELECTED_OPTIMIZATION", "-Os", "x", "", d) == "x":
+        bb.note("glibc can't be built with -Os, -Os -Wno-error will be used instead.")
+        return selected_optimization.replace("-Os", "-Os -Wno-error")
     return selected_optimization
 
 SELECTED_OPTIMIZATION := "${@get_optimization(d)}"
 
 # siteconfig.bbclass runs configure which needs a working compiler
-# For the compiler to work we need a working libc yet libc isn't 
+# For the compiler to work we need a working libc yet libc isn't
 # in the sysroots directory at this point. This means the libc.so
 # linker script won't work as the --sysroot setting isn't correct.
 # Here we create a hacked up libc linker script and pass in the right
@@ -49,7 +52,6 @@ REQUIRED_DISTRO_FEATURES = "${DISTRO_FEATURES_LIBC}"
 LEAD_SONAME = "libc.so"
 
 CACHED_CONFIGUREVARS += " \
-  ac_cv_path_KSH=${base_bindir}/bash \
   ac_cv_path_BASH_SHELL=${base_bindir}/bash \
   libc_cv_slibdir=${base_libdir} \
   libc_cv_rootsbindir=${base_sbindir} \
@@ -61,6 +63,9 @@ GLIBC_EXTRA_OECONF ?= ""
 GLIBC_EXTRA_OECONF_class-nativesdk = ""
 INHIBIT_DEFAULT_DEPS = "1"
 
+# This needs to match with glibc-collateral.inc, otherwise glibc-scripts and glibc-locale
+# will fail to find main glibc, for details see
+# http://lists.openembedded.org/pipermail/openembedded-core/2015-January/100679.html
 ARM_INSTRUCTION_SET = "arm"
 
 # glibc uses PARALLELMFLAGS variable to pass parallel build info so transfer
@@ -71,7 +76,7 @@ EXTRA_OEMAKE += "${EGLIBCPARALLELISM}"
 PARALLEL_MAKE = ""
 
 # glibc make-syscalls.sh has a number of issues with /bin/dash and
-# it's output which make calls via the SHELL also has issues, so 
+# it's output which make calls via the SHELL also has issues, so
 # ensure make uses /bin/bash
 EXTRA_OEMAKE += "SHELL=/bin/bash"
 
@@ -82,7 +87,7 @@ do_configure_prepend() {
 }
 
 do_configure_append() {
-	oe_runmake config
+	yes '' | oe_runmake config
 
 	# Remove quotation marks from OPTION_EGLIBC_NSSWITCH_FIXED_*. This will
 	# avoid install error.

@@ -21,13 +21,13 @@ def autotools_dep_prepend(d):
 
 EXTRA_OEMAKE = ""
 
-DEPENDS_prepend = "${@autotools_dep_prepend(d)}"
+DEPENDS_prepend = "${@autotools_dep_prepend(d)} "
 
 inherit siteinfo
 
 # Space separated list of shell scripts with variables defined to supply test
 # results for autoconf tests we cannot run at build time.
-export CONFIG_SITE = "${@siteinfo_get_files(d)}"
+export CONFIG_SITE = "${@siteinfo_get_files(d, False)}"
 
 acpaths = "default"
 EXTRA_AUTORECONF = "--exclude=autopoint"
@@ -86,8 +86,8 @@ oe_runconf () {
 		${CACHED_CONFIGUREVARS} $cfgscript ${CONFIGUREOPTS} ${EXTRA_OECONF} "$@"
 		if [ "$?" != "0" ]; then
 			echo "Configure failed. The contents of all config.log files follows to aid debugging"
-			find ${S} -name config.log -print -exec cat {} \;
-			bbfatal "oe_runconf failed"
+			find ${S} -ignore_readdir_race -name config.log -print -exec cat {} \;
+			die "oe_runconf failed"
 		fi
 		set -e
 	else
@@ -111,9 +111,10 @@ autotools_preconfigure() {
 				# regenerate them even if CFLAGS/LDFLAGS are different
 				cd ${S}
 				if [ "${CLEANBROKEN}" != "1" -a \( -e Makefile -o -e makefile -o -e GNUmakefile \) ]; then
+					echo "Running \"${MAKE} clean\" in ${S}"
 					${MAKE} clean
 				fi
-				find ${S} -name \*.la -delete
+				find ${S} -ignore_readdir_race -name \*.la -delete
 			fi
 		fi
 	fi
@@ -135,7 +136,7 @@ ACLOCALDIR = "${B}/aclocal-copy"
 python autotools_copy_aclocals () {
     s = d.getVar("S", True)
     if not os.path.exists(s + "/configure.in") and not os.path.exists(s + "/configure.ac"):
-        if not d.getVar("AUTOTOOLS_COPYACLOCAL"):
+        if not d.getVar("AUTOTOOLS_COPYACLOCAL", False):
             return
 
     taskdepdata = d.getVar("BB_TASKDEPDATA", False)
@@ -186,6 +187,7 @@ python autotools_copy_aclocals () {
     #bb.warn(str(configuredeps2))
 
     cp = []
+    siteconf = []    
     for c in configuredeps:
         if c.endswith("-native"):
             manifest = d.expand("${SSTATE_MANIFESTS}/manifest-${BUILD_ARCH}-%s.populate_sysroot" % c)
@@ -200,6 +202,8 @@ python autotools_copy_aclocals () {
             for l in f:
                 if "/aclocal/" in l and l.strip().endswith(".m4"):
                     cp.append(l.strip())
+                elif "config_site.d/" in l:
+                    cp.append(l.strip())
         except:
             bb.warn("%s not found" % manifest)
 
@@ -207,6 +211,8 @@ python autotools_copy_aclocals () {
         t = os.path.join(aclocaldir, os.path.basename(c))
         if not os.path.exists(t):
             os.symlink(c, t)
+            
+    d.setVar("CONFIG_SITE", siteinfo_get_files(d, False))
 }
 autotools_copy_aclocals[vardepsexclude] += "MACHINE SDK_ARCH BUILD_ARCH SDK_OS BB_TASKDEPDATA"
 
@@ -219,7 +225,7 @@ autotools_do_configure() {
 	# for a package whose autotools are old, on an x86_64 machine, which the old
 	# config.sub does not support.  Work around this by installing them manually
 	# regardless.
-	( for ac in `find ${S} -name configure.in -o -name configure.ac`; do
+	( for ac in `find ${S} -ignore_readdir_race -name configure.in -o -name configure.ac`; do
 		rm -f `dirname $ac`/configure
 		done )
 	if [ -e ${S}/configure.in -o -e ${S}/configure.ac ]; then
@@ -228,7 +234,7 @@ autotools_do_configure() {
 		ACLOCAL="aclocal --system-acdir=${ACLOCALDIR}/"
 		if [ x"${acpaths}" = xdefault ]; then
 			acpaths=
-			for i in `find ${S} -maxdepth 2 -name \*.m4|grep -v 'aclocal.m4'| \
+			for i in `find ${S} -ignore_readdir_race -maxdepth 2 -name \*.m4|grep -v 'aclocal.m4'| \
 				grep -v 'acinclude.m4' | grep -v 'aclocal-copy' | sed -e 's,\(.*/\).*$,\1,'|sort -u`; do
 				acpaths="$acpaths -I $i"
 			done
@@ -269,7 +275,7 @@ autotools_do_configure() {
 					fi
 				fi
 				for i in gettext.m4 iconv.m4 lib-ld.m4 lib-link.m4 lib-prefix.m4 nls.m4 po.m4 progtest.m4; do
-					for j in `find ${S} -name $i | grep -v aclocal-copy`; do
+					for j in `find ${S} -ignore_readdir_race -name $i | grep -v aclocal-copy`; do
 						rm $j
 					done
 				done
@@ -281,7 +287,7 @@ autotools_do_configure() {
 			intltoolize --copy --force --automake
 		fi
 		bbnote Executing ACLOCAL=\"$ACLOCAL\" autoreconf --verbose --install --force ${EXTRA_AUTORECONF} $acpaths
-		ACLOCAL="$ACLOCAL" autoreconf -Wcross --verbose --install --force ${EXTRA_AUTORECONF} $acpaths || bbfatal "autoreconf execution failed."
+		ACLOCAL="$ACLOCAL" autoreconf -Wcross --verbose --install --force ${EXTRA_AUTORECONF} $acpaths || die "autoreconf execution failed."
 		cd $olddir
 	fi
 	if [ -e ${S}/configure ]; then

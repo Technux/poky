@@ -14,16 +14,14 @@ DEPENDS += "pkgconfig-native"
 LIC_FILES_CHKSUM = "file://COPYING;md5=a6f89e2100d9b6cdffcea4f398e37343 \
                     file://libkmod/COPYING;md5=a6f89e2100d9b6cdffcea4f398e37343 \
                    "
-inherit autotools gtk-doc ptest
+inherit autotools gtk-doc
 
-SRCREV = "fd56638aed3fe147015bfa10ed4a5f7491303cb4"
+SRCREV = "0d833715eaa65636dda2705b89359a1e0154dc58"
 # Lookout for PV bump too when SRCREV is changed
-PV = "19+git${SRCPV}"
+PV = "21+git${SRCPV}"
 
 SRC_URI = "git://git.kernel.org/pub/scm/utils/kernel/kmod/kmod.git \
            file://depmod-search.conf \
-           file://run-ptest \
-           file://ptest.patch \
            file://avoid_parallel_tests.patch \
            file://fix-O_CLOEXEC.patch \
           "
@@ -31,8 +29,15 @@ SRC_URI = "git://git.kernel.org/pub/scm/utils/kernel/kmod/kmod.git \
 S = "${WORKDIR}/git"
 
 EXTRA_AUTORECONF += "--install --symlink"
-EXTRA_OECONF +="--enable-debug --enable-logging --enable-tools --disable-manpages --with-zlib"
+EXTRA_OECONF +=" --enable-tools --disable-manpages --with-zlib"
+
+PACKAGECONFIG[debug] = "--enable-debug,--disable-debug"
+PACKAGECONFIG[logging] = " --enable-logging,--disable-logging"
 
 do_configure_prepend () {
         gtkdocize --docdir ${S}/libkmod/docs || touch ${S}/libkmod/docs/gtk-doc.make
+}
+
+do_configure_append () {
+	sed -i 's#}libtool#}${TARGET_SYS}-libtool#' ${B}/doltlibtool
 }

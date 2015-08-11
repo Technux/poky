@@ -4,10 +4,12 @@ network interface for a qemu machine."
 LICENSE = "GPLv2"
 LIC_FILES_CHKSUM = "file://${COREBASE}/meta/files/common-licenses/GPL-2.0;md5=801f80980d171dd6425610833a22dbe6"
 
-SRC_URI_append_qemuall = "file://wired.config \
-                          file://wired-setup \
-                         "
+SRC_URI_append_qemuall = " file://wired.config \
+                           file://wired-setup \
+"
 PR = "r2"
+
+S = "${WORKDIR}"
 
 PACKAGE_ARCH = "${MACHINE_ARCH}"
 

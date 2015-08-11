@@ -20,7 +20,7 @@ import os, sys
 from wic import msger
 from wic import pluginbase
 from wic.utils import errors
-from wic.utils.oe.misc import *
+from wic.utils.oe.misc import get_bitbake_var
 
 __ALL__ = ['PluginMgr', 'pluginmgr']
 
@@ -74,8 +74,6 @@ class PluginMgr(object):
         path = os.path.abspath(os.path.expanduser(path))
 
         if not os.path.isdir(path):
-            msger.debug("Plugin dir is not a directory or does not exist: %s"\
-                          % path)
             return
 
         if path not in self.plugin_dirs:
@@ -103,7 +101,7 @@ class PluginMgr(object):
                                 % (os.path.basename(pdir), mod, err)
                             msger.warning(msg)
 
-            del(sys.path[0])
+            del sys.path[0]
 
     def get_plugins(self, ptype):
         """ the return value is dict of name:class pairs """

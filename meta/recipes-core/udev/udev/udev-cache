@@ -32,7 +32,7 @@ META_FILE_LIST="lib/udev/rules.d/* etc/udev/rules.d/*"
 # Command to compute system configuration.
 sysconf_cmd () {
 	cat -- $CMP_FILE_LIST
-	stat -L -c '%s %Y %n' -- $META_FILE_LIST | awk -F/ '{print $1 " " $NF;}'
+	stat -c '%s %Y %n' -- $META_FILE_LIST | awk -F/ '{print $1 " " $NF;}'
 }
 
 [ -f /etc/default/udev-cache ] && . /etc/default/udev-cache
@@ -51,13 +51,19 @@ fi
 [ "${VERBOSE}" == "no" ] || echo "found."
 echo "Populating dev cache"
 
+err_cleanup () {
+        echo "udev-cache: update failed!"
+        udevadm control --start-exec-queue
+	rm -f -- "$SYSCONF_TMP" "$DEVCACHE_TMP" "$DEVCACHE" "$SYSCONF_CACHED"
+}
+
 (
 	set -e
-	trap 'echo "udev-cache: update failed!"' EXIT
+	trap 'err_cleanup' EXIT
 	udevadm control --stop-exec-queue
 	sysconf_cmd > "$SYSCONF_TMP"
 	find /dev -xdev \( -type b -o -type c -o -type l \) | cut -c 2- \
-		| xargs tar cf "${DEVCACHE_TMP}" -T-
+		| xargs tar cf "${DEVCACHE_TMP}"
 	gzip < "${DEVCACHE_TMP}" > "$DEVCACHE"
 	rm -f "${DEVCACHE_TMP}"
 	mv "$SYSCONF_TMP" "$SYSCONF_CACHED"

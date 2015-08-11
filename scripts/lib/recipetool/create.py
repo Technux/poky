@@ -1,6 +1,6 @@
 # Recipe creation tool - create command plugin
 #
-# Copyright (C) 2014 Intel Corporation
+# Copyright (C) 2014-2015 Intel Corporation
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 as
@@ -22,6 +22,7 @@ import glob
 import fnmatch
 import re
 import logging
+import scriptutils
 
 logger = logging.getLogger('recipetool')
 
@@ -57,13 +58,13 @@ class RecipeHandler():
 
 
 
-def fetch_source(uri, destdir):
+def fetch_source(uri, destdir, srcrev):
     import bb.data
     bb.utils.mkdirhier(destdir)
     localdata = bb.data.createCopy(tinfoil.config_data)
     bb.data.update_data(localdata)
     localdata.setVar('BB_STRICT_CHECKSUM', '')
-    localdata.setVar('SRCREV', '${AUTOREV}')
+    localdata.setVar('SRCREV', srcrev)
     ret = (None, None)
     olddir = os.getcwd()
     try:
@@ -87,6 +88,9 @@ def fetch_source(uri, destdir):
 
 def supports_srcrev(uri):
     localdata = bb.data.createCopy(tinfoil.config_data)
+    # This is a bit sad, but if you don't have this set there can be some
+    # odd interactions with the urldata cache which lead to errors
+    localdata.setVar('SRCREV', '${AUTOREV}')
     bb.data.update_data(localdata)
     fetcher = bb.fetch2.Fetch([uri], localdata)
     urldata = fetcher.ud
@@ -107,16 +111,19 @@ def create_recipe(args):
     checksums = (None, None)
     tempsrc = ''
     srcsubdir = ''
+    srcrev = '${AUTOREV}'
     if '://' in args.source:
         # Fetch a URL
         srcuri = args.source
-        if args.externalsrc:
-            srctree = args.externalsrc
-        else:
-            tempsrc = tempfile.mkdtemp(prefix='recipetool-')
-            srctree = tempsrc
+        rev_re = re.compile(';rev=([^;]+)')
+        res = rev_re.search(srcuri)
+        if res:
+            srcrev = res.group(1)
+            srcuri = rev_re.sub('', srcuri)
+        tempsrc = tempfile.mkdtemp(prefix='recipetool-')
+        srctree = tempsrc
         logger.info('Fetching %s...' % srcuri)
-        checksums = fetch_source(args.source, srctree)
+        checksums = fetch_source(args.source, srctree, srcrev)
         dirlist = os.listdir(srctree)
         if 'git.indirectionsymlink' in dirlist:
             dirlist.remove('git.indirectionsymlink')
@@ -126,8 +133,8 @@ def create_recipe(args):
             srctree = os.path.join(srctree, srcsubdir)
     else:
         # Assume we're pointing to an existing source tree
-        if args.externalsrc:
-            logger.error('externalsrc cannot be specified if source is a directory')
+        if args.extract_to:
+            logger.error('--extract-to cannot be specified if source is a directory')
             sys.exit(1)
         if not os.path.isdir(args.source):
             logger.error('Invalid source directory %s' % args.source)
@@ -189,9 +196,17 @@ def create_recipe(args):
         pn = recipefn
         pv = None
 
+    if args.version:
+        pv = args.version
+
+    if pv and pv not in 'git svn hg'.split():
+        realpv = pv
+    else:
+        realpv = None
+
     if srcuri:
-        if pv and pv not in 'git svn hg'.split():
-            srcuri = srcuri.replace(pv, '${PV}')
+        if realpv:
+            srcuri = srcuri.replace(realpv, '${PV}')
     else:
         lines_before.append('# No information for SRC_URI yet (only an external source tree was specified)')
     lines_before.append('SRC_URI = "%s"' % srcuri)
@@ -203,8 +218,8 @@ def create_recipe(args):
     if srcuri and supports_srcrev(srcuri):
         lines_before.append('')
         lines_before.append('# Modify these as desired')
-        lines_before.append('PV = "1.0+git${SRCPV}"')
-        lines_before.append('SRCREV = "${AUTOREV}"')
+        lines_before.append('PV = "%s+git${SRCPV}"' % (realpv or '1.0'))
+        lines_before.append('SRCREV = "%s"' % srcrev)
     lines_before.append('')
 
     if srcsubdir and pv:
@@ -212,6 +227,8 @@ def create_recipe(args):
             # This would be the default, so we don't need to set S in the recipe
             srcsubdir = ''
     if srcsubdir:
+        if pv and pv not in 'git svn hg'.split():
+            srcsubdir = srcsubdir.replace(pv, '${PV}')
         lines_before.append('S = "${WORKDIR}/%s"' % srcsubdir)
         lines_before.append('')
 
@@ -237,6 +254,11 @@ def create_recipe(args):
         outlines.append('inherit %s' % ' '.join(classes))
         outlines.append('')
     outlines.extend(lines_after)
+
+    if args.extract_to:
+        scriptutils.git_convert_standalone_clone(srctree)
+        shutil.move(srctree, args.extract_to)
+        logger.info('Source extracted to %s' % args.extract_to)
 
     if outfile == '-':
         sys.stdout.write('\n'.join(outlines) + '\n')
@@ -308,7 +330,9 @@ def guess_license(srctree):
         for fn in files:
             for spec in licspecs:
                 if fnmatch.fnmatch(fn, spec):
-                    licfiles.append(os.path.join(root, fn))
+                    fullpath = os.path.join(root, fn)
+                    if not fullpath in licfiles:
+                        licfiles.append(fullpath)
     for licfile in licfiles:
         md5value = bb.utils.md5_file(licfile)
         license = md5sums.get(md5value, 'Unknown')
@@ -404,10 +428,13 @@ def convert_debian(debpath):
 
 
 def register_command(subparsers):
-    parser_create = subparsers.add_parser('create', help='Create a new recipe')
+    parser_create = subparsers.add_parser('create',
+                                          help='Create a new recipe',
+                                          description='Creates a new recipe from a source tree')
     parser_create.add_argument('source', help='Path or URL to source')
-    parser_create.add_argument('-o', '--outfile', help='Full path and filename to recipe to add', required=True)
+    parser_create.add_argument('-o', '--outfile', help='Specify filename for recipe to create', required=True)
     parser_create.add_argument('-m', '--machine', help='Make recipe machine-specific as opposed to architecture-specific', action='store_true')
-    parser_create.add_argument('-x', '--externalsrc', help='Assuming source is a URL, fetch it and extract it to the specified directory')
+    parser_create.add_argument('-x', '--extract-to', metavar='EXTRACTPATH', help='Assuming source is a URL, fetch it and extract it to the directory specified as %(metavar)s')
+    parser_create.add_argument('-V', '--version', help='Version to use within recipe (PV)')
     parser_create.set_defaults(func=create_recipe)
 

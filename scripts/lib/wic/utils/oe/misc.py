@@ -24,11 +24,29 @@
 # AUTHORS
 # Tom Zanussi <tom.zanussi (at] linux.intel.com>
 #
+"""Miscellaneous functions."""
+
+from collections import defaultdict
 
 from wic import msger
 from wic.utils import runner
 
-def __exec_cmd(cmd_and_args, as_shell = False, catch = 3):
+# executable -> recipe pairs for exec_native_cmd
+NATIVE_RECIPES = {"mcopy": "mtools",
+                  "mkdosfs": "dosfstools",
+                  "mkfs.btrfs": "btrfs-tools",
+                  "mkfs.ext2": "e2fsprogs",
+                  "mkfs.ext3": "e2fsprogs",
+                  "mkfs.ext4": "e2fsprogs",
+                  "mkfs.vfat": "dosfstools",
+                  "mksquashfs": "squashfs-tools",
+                  "mkswqp": "util-linux",
+                  "parted": "parted",
+                  "sgdisk": "gptfdisk",
+                  "syslinux": "syslinux"
+                 }
+
+def __exec_cmd(cmd_and_args, as_shell=False, catch=3):
     """
     Execute command, catching stderr, stdout
 
@@ -38,41 +56,33 @@ def __exec_cmd(cmd_and_args, as_shell = False, catch = 3):
     args = cmd_and_args.split()
     msger.debug(args)
 
-    if (as_shell):
-        rc, out = runner.runtool(cmd_and_args, catch)
+    if as_shell:
+        ret, out = runner.runtool(cmd_and_args, catch)
     else:
-        rc, out = runner.runtool(args, catch)
+        ret, out = runner.runtool(args, catch)
     out = out.strip()
     msger.debug("__exec_cmd: output for %s (rc = %d): %s" % \
-                (cmd_and_args, rc, out))
+                (cmd_and_args, ret, out))
 
-    return (rc, out)
+    return (ret, out)
 
 
-def exec_cmd(cmd_and_args, as_shell = False, catch = 3):
+def exec_cmd(cmd_and_args, as_shell=False, catch=3):
     """
     Execute command, catching stderr, stdout
 
     Exits if rc non-zero
     """
-    rc, out = __exec_cmd(cmd_and_args, as_shell, catch)
+    ret, out = __exec_cmd(cmd_and_args, as_shell, catch)
 
-    if rc != 0:
-        msger.error("exec_cmd: %s returned '%s' instead of 0" % (cmd_and_args, rc))
+    if ret != 0:
+        msger.error("exec_cmd: %s returned '%s' instead of 0" % \
+                    (cmd_and_args, ret))
 
     return out
 
 
-def exec_cmd_quiet(cmd_and_args, as_shell = False):
-    """
-    Execute command, catching nothing in the output
-
-    Exits if rc non-zero
-    """
-    return exec_cmd(cmd_and_args, as_shell, 0)
-
-
-def exec_native_cmd(cmd_and_args, native_sysroot, catch = 3):
+def exec_native_cmd(cmd_and_args, native_sysroot, catch=3):
     """
     Execute native command, catching stderr, stdout
 
@@ -81,7 +91,7 @@ def exec_native_cmd(cmd_and_args, native_sysroot, catch = 3):
     Always need to execute native commands as_shell
     """
     native_paths = \
-        "export PATH=%s/sbin:%s/usr/sbin:%s/usr/bin:$PATH" % \
+        "export PATH=%s/sbin:%s/usr/sbin:%s/usr/bin" % \
         (native_sysroot, native_sysroot, native_sysroot)
     native_cmd_and_args = "%s;%s" % (native_paths, cmd_and_args)
     msger.debug("exec_native_cmd: %s" % cmd_and_args)
@@ -89,97 +99,73 @@ def exec_native_cmd(cmd_and_args, native_sysroot, catch = 3):
     args = cmd_and_args.split()
     msger.debug(args)
 
-    rc, out = __exec_cmd(native_cmd_and_args, True, catch)
+    ret, out = __exec_cmd(native_cmd_and_args, True, catch)
 
-    if rc == 127: # shell command-not-found
-        msger.error("A native (host) program required to build the image "
-                    "was not found (see details above). Please make sure "
-                    "it's installed and try again.")
+    if ret == 127: # shell command-not-found
+        prog = args[0]
+        msg = "A native program %s required to build the image "\
+              "was not found (see details above).\n\n" % prog
+        recipe = NATIVE_RECIPES.get(prog)
+        if recipe:
+            msg += "Please bake it with 'bitbake %s-native' "\
+                   "and try again.\n" % recipe
+        else:
+            msg += "Wic failed to find a recipe to build native %s. Please "\
+                   "file a bug against wic.\n" % prog
+        msger.error(msg)
+    if out:
+        msger.debug('"%s" output: %s' % (args[0], out))
 
-    return (rc, out)
+    if ret != 0:
+        msger.error("exec_cmd: '%s' returned '%s' instead of 0" % \
+                    (cmd_and_args, ret))
 
-
-def exec_native_cmd_quiet(cmd_and_args, native_sysroot):
-    """
-    Execute native command, catching nothing in the output
-
-    Need to execute as_shell if the command uses wildcards
-
-    Always need to execute native commands as_shell
-    """
-    return exec_native_cmd(cmd_and_args, native_sysroot, 0)
-
-
-# kickstart doesn't support variable substution in commands, so this
-# is our current simplistic scheme for supporting that
-
-wks_vars = dict()
-
-def get_wks_var(key):
-    return wks_vars[key]
-
-def add_wks_var(key, val):
-    wks_vars[key] = val
+    return ret, out
 
 BOOTDD_EXTRA_SPACE = 16384
-IMAGE_EXTRA_SPACE = 10240
-IMAGE_OVERHEAD_FACTOR = 1.3
 
-__bitbake_env_lines = ""
+_BITBAKE_VARS = defaultdict(dict)
 
-def set_bitbake_env_lines(bitbake_env_lines):
-    global __bitbake_env_lines
-    __bitbake_env_lines = bitbake_env_lines
-
-def get_bitbake_env_lines():
-    return __bitbake_env_lines
-
-def find_bitbake_env_lines(image_name):
+def get_bitbake_var(var, image=None):
     """
-    If image_name is empty, plugins might still be able to use the
-    environment, so set it regardless.
+    Get bitbake variable value lazy way, i.e. run
+    'bitbake -e' only when variable is requested.
     """
-    if image_name:
-        bitbake_env_cmd = "bitbake -e %s" % image_name
-    else:
-        bitbake_env_cmd = "bitbake -e"
-    rc, bitbake_env_lines = __exec_cmd(bitbake_env_cmd)
-    if rc != 0:
-        print "Couldn't get '%s' output." % bitbake_env_cmd
-        return None
+    if image not in _BITBAKE_VARS:
+        # Get bitbake -e output
+        cmd = "bitbake -e"
+        if image:
+            cmd += " %s" % image
 
-    return bitbake_env_lines
+        log_level = msger.get_loglevel()
+        msger.set_loglevel('normal')
+        ret, lines = __exec_cmd(cmd)
+        msger.set_loglevel(log_level)
 
-def find_artifact(bitbake_env_lines, variable):
-    """
-    Gather the build artifact for the current image (the image_name
-    e.g. core-image-minimal) for the current MACHINE set in local.conf
-    """
-    retval = ""
+        if ret:
+            print "Couldn't get '%s' output." % cmd
+            print "Bitbake failed with error:\n%s\n" % lines
+            return
 
-    for line in bitbake_env_lines.split('\n'):
-        if (get_line_val(line, variable)):
-            retval = get_line_val(line, variable)
-            break
+        # Parse bitbake -e output
+        for line in lines.split('\n'):
+            if "=" not in line:
+                continue
+            try:
+                key, val = line.split("=")
+            except ValueError:
+                continue
+            key = key.strip()
+            val = val.strip()
+            if key.replace('_', '').isalnum():
+                _BITBAKE_VARS[image][key] = val.strip('"')
 
-    return retval
+        # Make first image a default set of variables
+        images = [key for key in _BITBAKE_VARS if key]
+        if len(images) == 1:
+            _BITBAKE_VARS[None] = _BITBAKE_VARS[image]
 
-def get_line_val(line, key):
-    """
-    Extract the value from the VAR="val" string
-    """
-    if line.startswith(key + "="):
-        stripped_line = line.split('=')[1]
-        stripped_line = stripped_line.replace('\"', '')
-        return stripped_line
-    return None
-
-def get_bitbake_var(key):
-    for line in __bitbake_env_lines.split('\n'):
-        if (get_line_val(line, key)):
-            val = get_line_val(line, key)
-            return val
-    return None
+    return _BITBAKE_VARS[image].get(var)
 
 def parse_sourceparams(sourceparams):
     """
@@ -192,14 +178,14 @@ def parse_sourceparams(sourceparams):
 
     params = sourceparams.split(',')
     if params:
-        for p in params:
-            if not p:
+        for par in params:
+            if not par:
                 continue
-            if not '=' in p:
-                key = p
+            if not '=' in par:
+                key = par
                 val = None
             else:
-                key, val = p.split('=')
+                key, val = par.split('=')
             params_dict[key] = val
 
     return params_dict

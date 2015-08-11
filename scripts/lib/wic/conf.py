@@ -15,12 +15,11 @@
 # with this program; if not, write to the Free Software Foundation, Inc., 59
 # Temple Place - Suite 330, Boston, MA 02111-1307, USA.
 
-import os, sys, re
-import ConfigParser
+import os
 
 from wic import msger
 from wic import kickstart
-from wic.utils import misc, runner, errors
+from wic.utils import misc
 
 
 def get_siteconf():
@@ -31,20 +30,18 @@ def get_siteconf():
     return scripts_path + "/lib/image/config/wic.conf"
 
 class ConfigMgr(object):
-    DEFAULTS = {'common': {
-                    "distro_name": "Default Distribution",
-                    "plugin_dir": "/usr/lib/wic/plugins", # TODO use prefix also?
-                },
-                'create': {
-                    "tmpdir": '/var/tmp/wic',
-                    "outdir": './wic-output',
-
-                    "release": None,
-                    "logfile": None,
-                    "name_prefix": None,
-                    "name_suffix": None,
-                },
-               }
+    DEFAULTS = {
+        'common': {
+            "distro_name": "Default Distribution",
+            "plugin_dir": "/usr/lib/wic/plugins"}, # TODO use prefix also?
+        'create': {
+            "tmpdir": '/var/tmp/wic',
+            "outdir": './wic-output',
+            "release": None,
+            "logfile": None,
+            "name_prefix": None,
+            "name_suffix": None}
+        }
 
     # make the manager class as singleton
     _instance = None

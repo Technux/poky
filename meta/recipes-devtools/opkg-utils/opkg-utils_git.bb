@@ -12,6 +12,8 @@ PV = "0.1.8+git${SRCPV}"
 
 SRC_URI = "git://git.yoctoproject.org/opkg-utils"
 
+SRC_URI_append_class-native = " file://tar_ignore_error.patch"
+
 S = "${WORKDIR}/git"
 
 TARGET_CC_ARCH += "${LDFLAGS}"
@@ -24,6 +26,10 @@ PACKAGECONFIG[python] = ",,,${PYTHONRDEPS}"
 
 do_install() {
 	oe_runmake PREFIX=${prefix} DESTDIR=${D} install
+}
+
+do_install_append_class-target() {
+	sed -i ${D}${bindir}/update-alternatives -e 's,/usr/bin,${bindir},g; s,/usr/lib,${libdir},g'
 }
 
 PACKAGES =+ "update-alternatives-opkg"

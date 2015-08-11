@@ -2,11 +2,11 @@ require gcc-common.inc
 
 # Third digit in PV should be incremented after a minor release
 
-PV = "4.9.1"
+PV = "4.9.3"
 
 # BINV should be incremented to a revision after a minor gcc release
 
-BINV = "4.9.1"
+BINV = "4.9.3"
 
 FILESEXTRAPATHS =. "${FILE_DIRNAME}/gcc-4.9:"
 
@@ -67,16 +67,22 @@ SRC_URI = "\
     file://0049-Enable-SPE-AltiVec-generation-on-powepc-linux-target.patch \
     file://0050-Revert-Use-dbx_reg_number-for-spanning-registers.patch \
     file://0051-eabispe.patch \
+    file://0052-Add-target-hook-to-override-DWARF2-frame-register-si.patch \
     file://0053-gcc-fix-segfault-from-calling-free-on-non-malloc-d-a.patch \
     file://0054-gcc-Makefile.in-fix-parallel-building-failure.patch \
-    file://0055-PR-rtl-optimization-61801.patch \
-    file://0056-top-level-reorder_gcc-bug-61144.patch \
+    file://0055-dwarf-reg-processing-helper.patch \
+    file://0056-define-default-cfa-register-mapping.patch \
     file://0057-aarch64-config.patch \
     file://0058-gcc-r212171.patch \
     file://0059-gcc-PR-rtl-optimization-63348.patch \
+    file://0060-Only-allow-e500-double-in-SPE_SIMD_REGNO_P-registers.patch \
+    file://0061-target-gcc-includedir.patch \
+    file://0062-Use-SYSTEMLIBS_DIR-replacement-instead-of-hardcoding.patch \
+    file://0063-nativesdk-gcc-support.patch \
+    file://0064-handle-target-sysroot-multilib.patch \
 "
-SRC_URI[md5sum] = "fddf71348546af523353bd43d34919c1"
-SRC_URI[sha256sum] = "d334781a124ada6f38e63b545e2a3b8c2183049515a1abab6d513f109f1d717e"
+SRC_URI[md5sum] = "6f831b4d251872736e8e9cc09746f327"
+SRC_URI[sha256sum] = "2332b2a5a321b57508b9031354a8503af6fdfb868b8c1748d33028d100a8b67e"
 
 S = "${TMPDIR}/work-shared/gcc-${PV}-${PR}/gcc-${PV}"
 B = "${WORKDIR}/gcc-${PV}/build.${HOST_SYS}.${TARGET_SYS}"
@@ -112,22 +118,10 @@ EXTRA_OECONF_INITIAL = "\
     --enable-decimal-float=no \
 "
 
-EXTRA_OECONF_INTERMEDIATE = "\
-    --disable-libmudflap \
-    --disable-libgomp \
-    --disable-libquadmath \
-    --with-system-zlib \
-    --disable-lto \
-    --disable-plugin \
-    --disable-libssp \
-"
-
 EXTRA_OECONF_append_libc-uclibc = " --disable-decimal-float "
 
-EXTRA_OECONF_PATHS = "\ 
-    --with-gxx-include-dir=/not/exist{target_includedir}/c++/${BINV} \ 
-    --with-sysroot=/not/exist \ 
+EXTRA_OECONF_PATHS = "\
+    --with-gxx-include-dir=/not/exist{target_includedir}/c++/${BINV} \
+    --with-sysroot=/not/exist \
     --with-build-sysroot=${STAGING_DIR_TARGET} \
 "
-
-

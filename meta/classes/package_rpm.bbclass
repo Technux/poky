@@ -197,6 +197,16 @@ python write_specfile () {
             if path.endswith("DEBIAN") or path.endswith("CONTROL"):
                 continue
 
+            # Treat all symlinks to directories as normal files.
+            # os.walk() lists them as directories.
+            def move_to_files(dir):
+                if os.path.islink(os.path.join(rootpath, dir)):
+                    files.append(dir)
+                    return True
+                else:
+                    return False
+            dirs[:] = [dir for dir in dirs if not move_to_files(dir)]
+
             # Directory handling can happen in two ways, either DIRFILES is not set at all
             # in which case we fall back to the older behaviour of packages owning all their
             # directories
@@ -320,11 +330,11 @@ python write_specfile () {
             pkgname = pkg
         localdata.setVar('PKG', pkgname)
 
-        localdata.setVar('OVERRIDES', pkg)
+        localdata.setVar('OVERRIDES', d.getVar("OVERRIDES", False) + ":" + pkg)
 
         bb.data.update_data(localdata)
 
-        conffiles = (localdata.getVar('CONFFILES', True) or "").split()
+        conffiles = get_conffiles(pkg, d)
         dirfiles = localdata.getVar('DIRFILES', True)
         if dirfiles is not None:
             dirfiles = dirfiles.split()
@@ -385,7 +395,7 @@ python write_specfile () {
 
             file_list = []
             walk_files(root, file_list, conffiles, dirfiles)
-            if not file_list and localdata.getVar('ALLOW_EMPTY') != "1":
+            if not file_list and localdata.getVar('ALLOW_EMPTY', False) != "1":
                 bb.note("Not creating empty RPM package for %s" % splitname)
             else:
                 bb.note("Creating RPM package for %s" % splitname)
@@ -494,7 +504,7 @@ python write_specfile () {
         # Now process files
         file_list = []
         walk_files(root, file_list, conffiles, dirfiles)
-        if not file_list and localdata.getVar('ALLOW_EMPTY') != "1":
+        if not file_list and localdata.getVar('ALLOW_EMPTY', False) != "1":
             bb.note("Not creating empty RPM package for %s" % splitname)
         else:
             spec_files_bottom.append('%%files -n %s' % splitname)

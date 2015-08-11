@@ -29,7 +29,10 @@ import subprocess
 
 from toastermain import settings
 
-from bbcontroller import BuildEnvironmentController, ShellCmdException, BuildSetupException, _getgitcheckoutdirectoryname
+from bbcontroller import BuildEnvironmentController, ShellCmdException, BuildSetupException
+
+class NotImplementedException(Exception):
+    pass
 
 def DN(path):
     return "/".join(path.split("/")[0:-1])
@@ -124,62 +127,8 @@ class SSHBEController(BuildEnvironmentController):
         assert len(bitbakes) == 1
         # set layers in the layersource
 
-        # 1. get a list of repos, and map dirpaths for each layer
-        gitrepos = {}
-        gitrepos[bitbakes[0].giturl] = []
-        gitrepos[bitbakes[0].giturl].append( ("bitbake", bitbakes[0].dirpath, bitbakes[0].commit) )
 
-        for layer in layers:
-            # we don't process local URLs
-            if layer.giturl.startswith("file://"):
-                continue
-            if not layer.giturl in gitrepos:
-                gitrepos[layer.giturl] = []
-            gitrepos[layer.giturl].append( (layer.name, layer.dirpath, layer.commit))
-        for giturl in gitrepos.keys():
-            commitid = gitrepos[giturl][0][2]
-            for e in gitrepos[giturl]:
-                if commitid != e[2]:
-                    raise BuildSetupException("More than one commit per git url, unsupported configuration")
-
-        layerlist = []
-
-        # 2. checkout the repositories
-        for giturl in gitrepos.keys():
-            import os
-            localdirname = os.path.join(self.be.sourcedir, _getgitcheckoutdirectoryname(giturl))
-            print "DEBUG: giturl ", giturl ,"checking out in current directory", localdirname
-
-            # make sure our directory is a git repository
-            if self._pathexists(localdirname):
-                if not giturl in self._shellcmd("git remote -v", localdirname):
-                    raise BuildSetupException("Existing git repository at %s, but with different remotes (not '%s'). Aborting." % (localdirname, giturl))
-            else:
-                self._shellcmd("git clone \"%s\" \"%s\"" % (giturl, localdirname))
-            # checkout the needed commit
-            commit = gitrepos[giturl][0][2]
-
-            # branch magic name "HEAD" will inhibit checkout
-            if commit != "HEAD":
-                print "DEBUG: checking out commit ", commit, "to", localdirname
-                self._shellcmd("git fetch --all && git checkout \"%s\"" % commit , localdirname)
-
-            # take the localdirname as poky dir if we can find the oe-init-build-env
-            if self.pokydirname is None and self._pathexists(os.path.join(localdirname, "oe-init-build-env")):
-                print "DEBUG: selected poky dir name", localdirname
-                self.pokydirname = localdirname
-
-            # verify our repositories
-            for name, dirpath, commit in gitrepos[giturl]:
-                localdirpath = os.path.join(localdirname, dirpath)
-                if not self._pathexists(localdirpath):
-                    raise BuildSetupException("Cannot find layer git path '%s' in checked out repository '%s:%s'. Aborting." % (localdirpath, giturl, commit))
-
-                if name != "bitbake":
-                    layerlist.append(localdirpath)
-
-        print "DEBUG: current layer list ", layerlist
-
+        raise NotImplementedException("Not implemented: SSH setLayers")
         # 3. configure the build environment, so we have a conf/bblayers.conf
         assert self.pokydirname is not None
         self._setupBE()
@@ -207,3 +156,24 @@ class SSHBEController(BuildEnvironmentController):
         import shutil
         shutil.rmtree(os.path.join(self.be.sourcedir, "build"))
         assert not self._pathexists(self.be.builddir)
+
+    def triggerBuild(self, bitbake, layers, variables, targets):
+        # set up the buid environment with the needed layers
+        self.setLayers(bitbake, layers)
+        self.writeConfFile("conf/toaster-pre.conf", )
+        self.writeConfFile("conf/toaster.conf", raw = "INHERIT+=\"toaster buildhistory\"")
+
+        # get the bb server running with the build req id and build env id
+        bbctrl = self.getBBController()
+
+        # trigger the build command
+        task = reduce(lambda x, y: x if len(y)== 0 else y, map(lambda y: y.task, targets))
+        if len(task) == 0:
+            task = None
+
+        bbctrl.build(list(map(lambda x:x.target, targets)), task)
+
+        logger.debug("localhostbecontroller: Build launched, exiting. Follow build logs at %s/toaster_ui.log" % self.be.builddir)
+
+        # disconnect from the server
+        bbctrl.disconnect()

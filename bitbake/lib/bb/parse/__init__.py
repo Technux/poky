@@ -26,9 +26,10 @@ File parsers for the BitBake build tools.
 
 handlers = []
 
+import errno
+import logging
 import os
 import stat
-import logging
 import bb
 import bb.utils
 import bb.siggen
@@ -73,10 +74,15 @@ def update_mtime(f):
     __mtime_cache[f] = os.stat(f)[stat.ST_MTIME]
     return __mtime_cache[f]
 
+def update_cache(f):
+    if f in __mtime_cache:
+        logger.debug(1, "Updating mtime cache for %s" % f)
+        update_mtime(f)
+
 def mark_dependency(d, f):
     if f.startswith('./'):
         f = "%s/%s" % (os.getcwd(), f[2:])
-    deps = (d.getVar('__depends') or [])
+    deps = (d.getVar('__depends', False) or [])
     s = (f, cached_mtime_noerror(f))
     if s not in deps:
         deps.append(s)
@@ -84,7 +90,7 @@ def mark_dependency(d, f):
 
 def check_dependency(d, f):
     s = (f, cached_mtime_noerror(f))
-    deps = (d.getVar('__depends') or [])
+    deps = (d.getVar('__depends', False) or [])
     return s in deps
    
 def supports(fn, data):
@@ -117,12 +123,12 @@ def resolve_file(fn, d):
         for af in attempts:
             mark_dependency(d, af)
         if not newfn:
-            raise IOError("file %s not found in %s" % (fn, bbpath))
+            raise IOError(errno.ENOENT, "file %s not found in %s" % (fn, bbpath))
         fn = newfn
 
     mark_dependency(d, fn)
     if not os.path.isfile(fn):
-        raise IOError("file %s not found" % fn)
+        raise IOError(errno.ENOENT, "file %s not found" % fn)
 
     return fn
 

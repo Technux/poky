@@ -15,7 +15,7 @@ SRC_URI = "git://uclibc.org/uClibc.git;branch=master \
 	file://argp-headers.patch \
 	file://remove_attribute_optimize_Os.patch \
 	file://compile-arm-fork-with-O2.patch \
-	file://orign_path.patch \
+	file://0001-ldso-limited-support-for-ORIGIN-in-rpath.patch \
 	file://0001-atexit_old-Do-not-add-it-to-shared-libc.patch \
 	file://0001-nptl-arm-Move-aeabi_read_tp-to-uclibc_nonshared.a.patch \
 	file://0001-nptl-atfork-Hide-pthread_atfork-in-shared-versions.patch \
@@ -25,5 +25,6 @@ SRC_URI = "git://uclibc.org/uClibc.git;branch=master \
 	file://0002-wire-setns-syscall.patch \
 	file://0001-Define-IPTOS_CLASS_-macros-according-to-RFC-2474.patch \
 	file://0001-timex-Sync-with-glibc.patch \
+	file://ldso-mark-_dl_exit-as-noreturn.patch \
 	"
 S = "${WORKDIR}/git"

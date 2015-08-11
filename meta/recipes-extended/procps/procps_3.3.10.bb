@@ -22,7 +22,7 @@ SRC_URI[sha256sum] = "a02e6f98974dfceab79884df902ca3df30b0e9bad6d76aee0fb5dce17f
 
 S = "${WORKDIR}/procps-ng-${PV}"
 
-EXTRA_OECONF = "--enable-skill"
+EXTRA_OECONF = "--enable-skill --disable-modern-top"
 
 CPPFLAGS += "-I${S}"
 
@@ -51,6 +51,10 @@ base_sbindir_progs += "sysctl"
 ALTERNATIVE_PRIORITY = "100"
 
 ALTERNATIVE_${PN} = "${bindir_progs} ${base_bindir_progs} ${base_sbindir_progs}"
+
+ALTERNATIVE_${PN}-doc = "kill.1 uptime.1"
+ALTERNATIVE_LINK_NAME[kill.1] = "${mandir}/man1/kill.1"
+ALTERNATIVE_LINK_NAME[uptime.1] = "${mandir}/man1/uptime.1"
 
 python __anonymous() {
     for prog in d.getVar('base_bindir_progs', True).split():

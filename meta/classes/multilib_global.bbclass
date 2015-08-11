@@ -30,7 +30,10 @@ def preferred_ml_updates(d):
                 override = ":virtclass-multilib-" + p
                 localdata.setVar("OVERRIDES", localdata.getVar("OVERRIDES", False) + override)
                 bb.data.update_data(localdata)
-                newname = localdata.expand(v).replace("PREFERRED_VERSION_", "PREFERRED_VERSION_" + p + '-')
+                if "-canadian-" in pkg:
+                    newname = localdata.expand(v)
+                else:
+                    newname = localdata.expand(v).replace("PREFERRED_VERSION_", "PREFERRED_VERSION_" + p + '-')
                 if newname != v:
                     newval = localdata.expand(val)
                     d.setVar(newname, newval)
@@ -84,7 +87,7 @@ def preferred_ml_updates(d):
             # implement alternative multilib name
             newname = localdata.expand("PREFERRED_PROVIDER_" + virt + p + "-" + pkg)
             if not d.getVar(newname, False):
-                d.setVar(newname, newval)
+                d.setVar(newname, localdata.expand(newval))
         # Avoid future variable key expansion
         provexp = d.expand(prov)
         if prov != provexp and d.getVar(prov, False):
@@ -142,7 +145,8 @@ python multilib_virtclass_handler_global () {
             origrprovs = rprovs = e.data.getVar("RPROVIDES", True) or ""
             for clsextend in clsextends:
                 rprovs = rprovs + " " + clsextend.map_variable("RPROVIDES", setvar=False)
-            e.data.setVar("RPROVIDES", rprovs)
+            if rprovs.strip():
+                e.data.setVar("RPROVIDES", rprovs)
 
 	    # Process RPROVIDES_${PN}...
             for pkg in (e.data.getVar("PACKAGES", True) or "").split():

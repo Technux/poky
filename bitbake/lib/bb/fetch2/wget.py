@@ -100,25 +100,198 @@ class Wget(FetchMethod):
 
         return True
 
-    def checkstatus(self, ud, d):
+    def checkstatus(self, fetch, ud, d):
+        import urllib2, socket, httplib
+        from urllib import addinfourl
+        from bb.fetch2 import FetchConnectionCache
+
+        class HTTPConnectionCache(httplib.HTTPConnection):
+            if fetch.connection_cache:
+                def connect(self):
+                    """Connect to the host and port specified in __init__."""
+
+                    sock = fetch.connection_cache.get_connection(self.host, self.port)
+                    if sock:
+                        self.sock = sock
+                    else:
+                        self.sock = socket.create_connection((self.host, self.port),
+                                    self.timeout, self.source_address)
+                        fetch.connection_cache.add_connection(self.host, self.port, self.sock)
+
+                    if self._tunnel_host:
+                        self._tunnel()
+
+        class CacheHTTPHandler(urllib2.HTTPHandler):
+            def http_open(self, req):
+                return self.do_open(HTTPConnectionCache, req)
+
+            def do_open(self, http_class, req):
+                """Return an addinfourl object for the request, using http_class.
+
+                http_class must implement the HTTPConnection API from httplib.
+                The addinfourl return value is a file-like object.  It also
+                has methods and attributes including:
+                    - info(): return a mimetools.Message object for the headers
+                    - geturl(): return the original request URL
+                    - code: HTTP status code
+                """
+                host = req.get_host()
+                if not host:
+                    raise urlllib2.URLError('no host given')
+
+                h = http_class(host, timeout=req.timeout) # will parse host:port
+                h.set_debuglevel(self._debuglevel)
+
+                headers = dict(req.unredirected_hdrs)
+                headers.update(dict((k, v) for k, v in req.headers.items()
+                            if k not in headers))
+
+                # We want to make an HTTP/1.1 request, but the addinfourl
+                # class isn't prepared to deal with a persistent connection.
+                # It will try to read all remaining data from the socket,
+                # which will block while the server waits for the next request.
+                # So make sure the connection gets closed after the (only)
+                # request.
+
+                # Don't close connection when connection_cache is enabled,
+                if fetch.connection_cache is None: 
+                    headers["Connection"] = "close"
+                else:
+                    headers["Connection"] = "Keep-Alive" # Works for HTTP/1.0
+
+                headers = dict(
+                    (name.title(), val) for name, val in headers.items())
+
+                if req._tunnel_host:
+                    tunnel_headers = {}
+                    proxy_auth_hdr = "Proxy-Authorization"
+                    if proxy_auth_hdr in headers:
+                        tunnel_headers[proxy_auth_hdr] = headers[proxy_auth_hdr]
+                        # Proxy-Authorization should not be sent to origin
+                        # server.
+                        del headers[proxy_auth_hdr]
+                    h.set_tunnel(req._tunnel_host, headers=tunnel_headers)
+
+                try:
+                    h.request(req.get_method(), req.get_selector(), req.data, headers)
+                except socket.error, err: # XXX what error?
+                    # Don't close connection when cache is enabled.
+                    if fetch.connection_cache is None:
+                        h.close()
+                    raise urllib2.URLError(err)
+                else:
+                    try:
+                        r = h.getresponse(buffering=True)
+                    except TypeError: # buffering kw not supported
+                        r = h.getresponse()
+
+                # Pick apart the HTTPResponse object to get the addinfourl
+                # object initialized properly.
+
+                # Wrap the HTTPResponse object in socket's file object adapter
+                # for Windows.  That adapter calls recv(), so delegate recv()
+                # to read().  This weird wrapping allows the returned object to
+                # have readline() and readlines() methods.
+
+                # XXX It might be better to extract the read buffering code
+                # out of socket._fileobject() and into a base class.
+                r.recv = r.read
+
+                # no data, just have to read
+                r.read()
+                class fp_dummy(object):
+                    def read(self):
+                        return ""
+                    def readline(self):
+                        return ""
+                    def close(self):
+                        pass
+
+                resp = addinfourl(fp_dummy(), r.msg, req.get_full_url())
+                resp.code = r.status
+                resp.msg = r.reason
+
+                # Close connection when server request it.
+                if fetch.connection_cache is not None:
+                    if 'Connection' in r.msg and r.msg['Connection'] == 'close':
+                        fetch.connection_cache.remove_connection(h.host, h.port)
+
+                return resp
+
+        def export_proxies(d):
+            variables = ['http_proxy', 'HTTP_PROXY', 'https_proxy', 'HTTPS_PROXY',
+                            'ftp_proxy', 'FTP_PROXY', 'no_proxy', 'NO_PROXY']
+            exported = False
+
+            for v in variables:
+                if v in os.environ.keys():
+                    exported = True
+                else:
+                    v_proxy = d.getVar(v, True)
+                    if v_proxy is not None:
+                        os.environ[v] = v_proxy
+                        exported = True
+
+            return exported
+
+        def head_method(self):
+            return "HEAD"
+
+        exported_proxies = export_proxies(d)
+
+        # XXX: Since Python 2.7.9 ssl cert validation is enabled by default
+        # see PEP-0476, this causes verification errors on some https servers
+        # so disable by default.
+        import ssl
+        ssl_context = None
+        if hasattr(ssl, '_create_unverified_context'):
+            ssl_context = ssl._create_unverified_context()
+
+        if exported_proxies == True and ssl_context is not None:
+            opener = urllib2.build_opener(urllib2.ProxyHandler, CacheHTTPHandler,
+                    urllib2.HTTPSHandler(context=ssl_context))
+        elif exported_proxies == False and ssl_context is not None:
+            opener = urllib2.build_opener(CacheHTTPHandler,
+                    urllib2.HTTPSHandler(context=ssl_context))
+        elif exported_proxies == True and ssl_context is None:
+            opener = urllib2.build_opener(urllib2.ProxyHandler, CacheHTTPHandler)
+        else:
+            opener = urllib2.build_opener(CacheHTTPHandler)
+
+        urllib2.Request.get_method = head_method
+        urllib2.install_opener(opener)
 
         uri = ud.url.split(";")[0]
-        fetchcmd = self.basecmd + " --spider '%s'" % uri
 
-        self._runwget(ud, d, fetchcmd, True)
-
+        try:
+            urllib2.urlopen(uri)
+        except:
+            return False
         return True
-
 
     def _parse_path(self, regex, s):
         """
         Find and group name, version and archive type in the given string s
         """
-        bb.debug(3, "parse_path(%s, %s)" % (regex.pattern, s))
+
         m = regex.search(s)
         if m:
-            bb.debug(3, "%s, %s, %s" % (m.group('name'), m.group('ver'), m.group('type')))
-            return (m.group('name'), m.group('ver'), m.group('type'))
+            pname = ''
+            pver = ''
+            ptype = ''
+
+            mdict = m.groupdict()
+            if 'name' in mdict.keys():
+                pname = mdict['name']
+            if 'pver' in mdict.keys():
+                pver = mdict['pver']
+            if 'type' in mdict.keys():
+                ptype = mdict['type']
+
+            bb.debug(3, "_parse_path: %s, %s, %s" % (pname, pver, ptype))
+
+            return (pname, pver, ptype)
+
         return None
 
     def _modelate_version(self, version):
@@ -128,11 +301,11 @@ class Wget(FetchMethod):
             else:
                 version = version[1:len(version)]
 
-        version = re.sub('\-', '.', version)
+        version = re.sub('-', '.', version)
         version = re.sub('_', '.', version)
-        version = re.sub('(rc)+', '.-1.', version)
-        version = re.sub('(alpha)+', '.-3.', version)
-        version = re.sub('(beta)+', '.-2.', version)
+        version = re.sub('(rc)+', '.1000.', version)
+        version = re.sub('(beta)+', '.100.', version)
+        version = re.sub('(alpha)+', '.10.', version)
         if version[0] == 'v':
             version = version[1:len(version)]
         return version
@@ -165,10 +338,7 @@ class Wget(FetchMethod):
         oldpv = self._modelate_version(oldpv)
         newpv = self._modelate_version(newpv)
 
-        if bb.utils.vercmp(("0", oldpv, ""), ("0", newpv, "")) < 0:
-            return True
-        else:
-            return False
+        return bb.utils.vercmp(("0", oldpv, ""), ("0", newpv, ""))
 
     def _fetch_index(self, uri, ud, d):
         """
@@ -188,99 +358,90 @@ class Wget(FetchMethod):
         f.close()
         return fetchresult
 
-    def _check_latest_dir(self, url, versionstring, ud, d):
-        """
-        Return the name of the directory with the greatest package version
-        If error or no version, return None
-        """
-        bb.debug(3, "DirURL: %s, %s" % (url, versionstring))
-        soup = BeautifulSoup(self._fetch_index(url, ud, d))
-        if not soup:
-            return None
-
-        valid = 0
-        prefix = ''
-        regex = re.compile("(\D*)((\d+[\.\-_])+(\d+))")
-        m = regex.search(versionstring)
-        if m:
-            version = ('', m.group(2), '')
-            prefix = m.group(1)
-            bb.debug(3, "version: %s, prefix: %s" % (version, prefix))
-        else:
-            version = ('', versionstring, '')
-
-        for href in soup.find_all('a', href=True):
-            bb.debug(3, "href: %s" % (href['href']))
-            if href['href'].find(versionstring) >= 0:
-                valid = 1
-            m = regex.search(href['href'].strip("/"))
-            if m:
-                thisversion = ('', m.group(2), '')
-                if thisversion and self._vercmp(version, thisversion) == True:
-                    version = thisversion
-
-        if valid:
-            bb.debug(3, "Would return %s" % (prefix+version[1]))
-            return prefix+version[1]
-        else:
-            bb.debug(3, "Not Valid")
-            return None
-
     def _check_latest_version(self, url, package, package_regex, current_version, ud, d):
         """
         Return the latest version of a package inside a given directory path
-        If error or no version, return None
+        If error or no version, return ""
         """
         valid = 0
-        version = ('', '', '')
+        version = ['', '', '']
 
         bb.debug(3, "VersionURL: %s" % (url))
         soup = BeautifulSoup(self._fetch_index(url, ud, d))
         if not soup:
             bb.debug(3, "*** %s NO SOUP" % (url))
-            return None
+            return ""
 
-        pn_regex = d.getVar('REGEX', True)
-        if pn_regex:
-            pn_regex = re.compile(pn_regex)
-            bb.debug(3, "pn_regex = '%s'" % (pn_regex.pattern))
-            
         for line in soup.find_all('a', href=True):
-            newver = None
-            bb.debug(3, "line = '%s'" % (line['href']))
-            if pn_regex:
-                m = pn_regex.search(line['href'])
-                if m:
-                    bb.debug(3, "Pver = '%s'" % (m.group('pver')))
-                    newver = ('', m.group('pver'), '')
-                else:
-                    m = pn_regex.search(str(line))
-                    if m:
-                        bb.debug(3, "Pver = '%s'" % (m.group('pver')))
-                        newver = ('', m.group('pver'), '')
-            else:
-                newver = self._parse_path(package_regex, line['href'])
-                if not newver:
-                    newver = self._parse_path(package_regex, str(line))
+            bb.debug(3, "line['href'] = '%s'" % (line['href']))
+            bb.debug(3, "line = '%s'" % (str(line)))
+
+            newver = self._parse_path(package_regex, line['href'])
+            if not newver:
+                newver = self._parse_path(package_regex, str(line))
 
             if newver:
                 bb.debug(3, "Upstream version found: %s" % newver[1])
                 if valid == 0:
                     version = newver
                     valid = 1
-                elif self._vercmp(version, newver) == True:
+                elif self._vercmp(version, newver) < 0:
                     version = newver
                 
-        # check whether a valid package and version were found
+        pupver = re.sub('_', '.', version[1])
+
         bb.debug(3, "*** %s -> UpstreamVersion = %s (CurrentVersion = %s)" %
-                (package, version[1] or "N/A", current_version[1]))
+                (package, pupver or "N/A", current_version[1]))
 
-        if valid and version:
-            return re.sub('_', '.', version[1])
+        if valid:
+            return pupver
 
-        return None
+        return ""
 
-    def _init_regexes(self, package):
+    def _check_latest_version_by_dir(self, dirver, package, package_regex,
+            current_version, ud, d):
+        """
+            Scan every directory in order to get upstream version.
+        """
+        version_dir = ['', '', '']
+        version = ['', '', '']
+
+        dirver_regex = re.compile("(\D*)((\d+[\.\-_])+(\d+))")
+        s = dirver_regex.search(dirver)
+        if s:
+            version_dir[1] = s.group(2)
+        else:
+            version_dir[1] = dirver
+
+        dirs_uri = bb.fetch.encodeurl([ud.type, ud.host,
+                ud.path.split(dirver)[0], ud.user, ud.pswd, {}])
+        bb.debug(3, "DirURL: %s, %s" % (dirs_uri, package))
+
+        soup = BeautifulSoup(self._fetch_index(dirs_uri, ud, d))
+        if not soup:
+            return version[1]
+
+        for line in soup.find_all('a', href=True):
+            s = dirver_regex.search(line['href'].strip("/"))
+            if s:
+                version_dir_new = ['', s.group(2), '']
+                if self._vercmp(version_dir, version_dir_new) <= 0:
+                    dirver_new = s.group(1) + s.group(2)
+                    path = ud.path.replace(dirver, dirver_new, True) \
+                        .split(package)[0]
+                    uri = bb.fetch.encodeurl([ud.type, ud.host, path,
+                        ud.user, ud.pswd, {}])
+
+                    pupver = self._check_latest_version(uri,
+                            package, package_regex, current_version, ud, d)
+                    if pupver:
+                        version[1] = pupver
+
+                    version_dir = version_dir_new
+
+        return version[1]
+
+    def _init_regexes(self, package, ud, d):
         """
         Match as many patterns as possible such as:
                 gnome-common-2.20.0.tar.gz (most common format)
@@ -295,11 +456,11 @@ class Wget(FetchMethod):
                 gst-fluendo-mp3
         """
         # match most patterns which uses "-" as separator to version digits
-        pn_prefix1 = "[a-zA-Z][a-zA-Z0-9]*([\-_][a-zA-Z]\w+)*\+?[\-_]"
+        pn_prefix1 = "[a-zA-Z][a-zA-Z0-9]*([-_][a-zA-Z]\w+)*\+?[-_]"
         # a loose pattern such as for unzip552.tar.gz
         pn_prefix2 = "[a-zA-Z]+"
         # a loose pattern such as for 80325-quicky-0.4.tar.gz
-        pn_prefix3 = "[0-9]+[\-]?[a-zA-Z]+"
+        pn_prefix3 = "[0-9]+[-]?[a-zA-Z]+"
         # Save the Package Name (pn) Regex for use later
         pn_regex = "(%s|%s|%s)" % (pn_prefix1, pn_prefix2, pn_prefix3)
 
@@ -307,28 +468,29 @@ class Wget(FetchMethod):
         pver_regex = "(([A-Z]*\d+[a-zA-Z]*[\.\-_]*)+)"
 
         # match arch
-        parch_regex = "\-source|_all_"
+        parch_regex = "-source|_all_"
 
         # src.rpm extension was added only for rpm package. Can be removed if the rpm
         # packaged will always be considered as having to be manually upgraded
         psuffix_regex = "(tar\.gz|tgz|tar\.bz2|zip|xz|rpm|bz2|orig\.tar\.gz|tar\.xz|src\.tar\.gz|src\.tgz|svnr\d+\.tar\.bz2|stable\.tar\.gz|src\.rpm)"
 
         # match name, version and archive type of a package
-        self.package_regex_comp = re.compile("(?P<name>%s?)\.?v?(?P<ver>%s)(?P<arch>%s)?[\.\-](?P<type>%s$)"
+        package_regex_comp = re.compile("(?P<name>%s?\.?v?)(?P<pver>%s)(?P<arch>%s)?[\.-](?P<type>%s$)"
                                                     % (pn_regex, pver_regex, parch_regex, psuffix_regex))
         self.suffix_regex_comp = re.compile(psuffix_regex)
 
-        # search for version matches on folders inside the path, like:
-        # "5.7" in http://download.gnome.org/sources/${PN}/5.7/${PN}-${PV}.tar.gz
-        self.dirver_regex_comp = re.compile("(?P<dirver>[^/]*(\d+\.)*\d+([\-_]r\d+)*)/")
-
-        # make custom regex for search in uri's
-        package_custom_regex_comp = None
-        version = self._parse_path(self.package_regex_comp, package)
-        if version:
-            package_custom_regex_comp = re.compile(
-                "(?P<name>%s)(?P<ver>%s)(?P<arch>%s)?[\.\-](?P<type>%s)$" %
-                (version[0], pver_regex, parch_regex, psuffix_regex))
+        # compile regex, can be specific by package or generic regex
+        pn_regex = d.getVar('REGEX', True)
+        if pn_regex:
+            package_custom_regex_comp = re.compile(pn_regex)
+        else:
+            version = self._parse_path(package_regex_comp, package)
+            if version:
+                package_custom_regex_comp = re.compile(
+                    "(?P<name>%s)(?P<pver>%s)(?P<arch>%s)?[\.-](?P<type>%s)" %
+                    (re.escape(version[0]), pver_regex, parch_regex, psuffix_regex))
+            else:
+                package_custom_regex_comp = None
 
         return package_custom_regex_comp
 
@@ -339,34 +501,41 @@ class Wget(FetchMethod):
         sanity check to ensure same name and type.
         """
         package = ud.path.split("/")[-1]
-        regex_uri = d.getVar("REGEX_URI", True)
-        newpath = regex_uri or ud.path
-        pupver = ""
-
-        package_custom_regex_comp = self._init_regexes(package)
-
-        current_version = ('', d.getVar('PV', True), '')
+        current_version = ['', d.getVar('PV', True), '']
 
         """possible to have no version in pkg name, such as spectrum-fw"""
         if not re.search("\d+", package):
-            return re.sub('_', '.', current_version[1])
+            current_version[1] = re.sub('_', '.', current_version[1])
+            current_version[1] = re.sub('-', '.', current_version[1])
+            return (current_version[1], '')
 
+        package_regex = self._init_regexes(package, ud, d)
+        if package_regex is None:
+            bb.warn("latest_versionstring: package %s don't match pattern" % (package))
+            return ('', '')
+        bb.debug(3, "latest_versionstring, regex: %s" % (package_regex.pattern))
+
+        uri = ""
+        regex_uri = d.getVar("REGEX_URI", True)
         if not regex_uri:
-            # generate the new uri with the appropriate latest directory
-            m = self.dirver_regex_comp.search(ud.path)
+            path = ud.path.split(package)[0]
+
+            # search for version matches on folders inside the path, like:
+            # "5.7" in http://download.gnome.org/sources/${PN}/5.7/${PN}-${PV}.tar.gz
+            dirver_regex = re.compile("(?P<dirver>[^/]*(\d+\.)*\d+([-_]r\d+)*)/")
+            m = dirver_regex.search(path)
             if m:
+                pn = d.getVar('PN', True)
                 dirver = m.group('dirver')
-                newuri = bb.fetch.encodeurl([ud.type, ud.host,
-                            ud.path.split(dirver)[0], ud.user, ud.pswd, {}])
-                new_dirver = self._check_latest_dir(newuri, dirver, ud, d)
-                if new_dirver and dirver != new_dirver:
-                    newpath = ud.path.replace(dirver, new_dirver, True)
 
-            newpath = newpath.split(package)[0] or "/"  # path to directory
-            newuri = bb.fetch.encodeurl([ud.type, ud.host, newpath, ud.user, ud.pswd, {}])
+                dirver_pn_regex = re.compile("%s\d?" % (re.escape(pn)))
+                if not dirver_pn_regex.search(dirver):
+                    return (self._check_latest_version_by_dir(dirver,
+                        package, package_regex, current_version, ud, d), '')
+
+            uri = bb.fetch.encodeurl([ud.type, ud.host, path, ud.user, ud.pswd, {}])
         else:
-            newuri = newpath
+            uri = regex_uri
 
-        return self._check_latest_version(newuri, package,
-                        package_custom_regex_comp or package_regex_comp,
-                        current_version, ud, d) or ""
+        return (self._check_latest_version(uri, package, package_regex,
+                current_version, ud, d), '')

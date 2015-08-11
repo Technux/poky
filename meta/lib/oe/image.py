@@ -66,7 +66,7 @@ class ImageDepGraph(object):
         return graph
 
     def _clean_graph(self):
-        # Live and VMDK images will be processed via inheriting
+        # Live and VMDK/VDI images will be processed via inheriting
         # bbclass and does not get processed here. Remove them from the fstypes
         # graph. Their dependencies are already added, so no worries here.
         remove_list = (self.d.getVar('IMAGE_TYPES_MASKED', True) or "").split()
@@ -76,7 +76,7 @@ class ImageDepGraph(object):
 
     def _image_base_type(self, type):
         ctypes = self.d.getVar('COMPRESSIONTYPES', True).split()
-        if type in ["vmdk", "live", "iso", "hddimg"]:
+        if type in ["vmdk", "vdi", "live", "iso", "hddimg"]:
             type = "ext3"
         basetype = type
         for ctype in ctypes:
@@ -296,7 +296,11 @@ class Image(ImageDepGraph):
                 bb.data.update_data(localdata)
                 localdata.setVar('type', type)
 
-                cmds.append("\t" + localdata.getVar("IMAGE_CMD", True))
+                image_cmd = localdata.getVar("IMAGE_CMD", True)
+                if image_cmd:
+                    cmds.append("\t" + image_cmd)
+                else:
+                    bb.fatal("No IMAGE_CMD defined for IMAGE_FSTYPES entry '%s' - possibly invalid type name or missing support class" % type)
                 cmds.append(localdata.expand("\tcd ${DEPLOY_DIR_IMAGE}"))
 
                 if type in cimages:

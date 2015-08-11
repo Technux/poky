@@ -28,6 +28,7 @@
 import subprocess
 import logging
 
+from wic.plugin import pluginmgr, PLUGIN_TYPES
 
 def subcommand_error(args):
     logging.info("invalid subcommand %s" % args[0])
@@ -52,7 +53,24 @@ def wic_help(args, usage_str, subcommands):
     Subcommand help dispatcher.
     """
     if len(args) == 1 or not display_help(args[1], subcommands):
-        print(usage_str)
+        print usage_str
+
+
+def get_wic_plugins_help():
+    """
+    Combine wic_plugins_help with the help for every known
+    source plugin.
+    """
+    result = wic_plugins_help
+    for plugin_type in PLUGIN_TYPES:
+        result += '\n\n%s PLUGINS\n\n' % plugin_type.upper()
+        for name, plugin in pluginmgr.get_plugins(plugin_type).iteritems():
+            result += "\n %s plugin:\n" % name
+            if plugin.__doc__:
+                result += plugin.__doc__
+            else:
+                result += "\n    %s is missing docstring\n" % plugin
+    return result
 
 
 def invoke_subcommand(args, parser, main_command_usage, subcommands):
@@ -63,11 +81,13 @@ def invoke_subcommand(args, parser, main_command_usage, subcommands):
     if not args:
         logging.error("No subcommand specified, exiting")
         parser.print_help()
+        return 1
     elif args[0] == "help":
         wic_help(args, main_command_usage, subcommands)
     elif args[0] not in subcommands:
         logging.error("Unsupported subcommand %s, exiting\n" % (args[0]))
         parser.print_help()
+        return 1
     else:
         usage = subcommands.get(args[0], subcommand_error)[1]
         subcommands.get(args[0], subcommand_error)[0](args[1:], usage)
@@ -81,19 +101,17 @@ wic_usage = """
 
  Create a customized OpenEmbedded image
 
- usage: wic [--version] [--help] COMMAND [ARGS]
+ usage: wic [--version] | [--help] | [COMMAND [ARGS]]
 
  Current 'wic' commands are:
+    help              Show help for command or one of the topics (see below)
     create            Create a new OpenEmbedded image
     list              List available values for options and image properties
 
  Help topics:
-    overview           wic overview - General overview of wic
-    plugins            wic plugins - Overview and API
-    kickstart          wic kickstart - wic kickstart reference
-
- See 'wic help <COMMAND or HELP TOPIC>' for more information on a specific
- command or help topic.
+    overview          wic overview - General overview of wic
+    plugins           wic plugins - Overview and API
+    kickstart         wic kickstart - wic kickstart reference
 """
 
 wic_help_usage = """
@@ -111,7 +129,7 @@ wic_create_usage = """
             [-i <JSON PROPERTY FILE> | --infile <JSON PROPERTY_FILE>]
             [-e | --image-name] [-s, --skip-build-check] [-D, --debug]
             [-r, --rootfs-dir] [-b, --bootimg-dir]
-            [-k, --kernel-dir] [-n, --native-sysroot]
+            [-k, --kernel-dir] [-n, --native-sysroot] [-f, --build-rootfs]
 
  This command creates an OpenEmbedded image based on the 'OE kickstart
  commands' found in the <wks file>.
@@ -129,10 +147,10 @@ NAME
 
 SYNOPSIS
     wic create <wks file or image name> [-o <DIRNAME> | --outdir <DIRNAME>]
-        [-i <JSON PROPERTY FILE> | --infile <JSON PROPERTY_FILE>]
         [-e | --image-name] [-s, --skip-build-check] [-D, --debug]
         [-r, --rootfs-dir] [-b, --bootimg-dir]
-        [-k, --kernel-dir] [-n, --native-sysroot]
+        [-k, --kernel-dir] [-n, --native-sysroot] [-f, --build-rootfs]
+        [-c, --compress-with]
 
 DESCRIPTION
     This command creates an OpenEmbedded image based on the 'OE
@@ -167,6 +185,8 @@ DESCRIPTION
     The -n option is used to specify the path to the native sysroot
     containing the tools to use to build the image.
 
+    The -f option is used to build rootfs by running "bitbake <image>"
+
     The -s option is used to skip the build check.  The build check is
     a simple sanity check used to determine whether the user has
     sourced the build environment so that the -e option can operate
@@ -197,11 +217,8 @@ DESCRIPTION
     The -o option can be used to place the image in a directory with a
     different name and location.
 
-    As an alternative to the wks file, the image-specific properties
-    that define the values that will be used to generate a particular
-    image can be specified on the command-line using the -i option and
-    supplying a JSON object consisting of the set of name:value pairs
-    needed by image creation.
+    The -c option is used to specify compressor utility to compress
+    an image. gzip, bzip2 and xz compressors are supported.
 
     The set of properties available for a given image type can be
     listed using the 'wic list' command.
@@ -528,8 +545,8 @@ DESCRIPTION
        usage: wic create <wks file or image name> [-o <DIRNAME> | ...]
             [-i <JSON PROPERTY FILE> | --infile <JSON PROPERTY_FILE>]
             [-e | --image-name] [-s, --skip-build-check] [-D, --debug]
-            [-r, --rootfs-dir] [-b, --bootimg-dir]
-            [-k, --kernel-dir] [-n, --native-sysroot]
+            [-r, --rootfs-dir] [-b, --bootimg-dir] [-k, --kernel-dir]
+            [-n, --native-sysroot] [-f, --build-rootfs]
 
        This command creates an OpenEmbedded image based on the 'OE
        kickstart commands' found in the <wks file>.
@@ -599,18 +616,33 @@ DESCRIPTION
     and also uses the -o option to have wic create the output
     somewhere other than the default /var/tmp/wic:
 
-      $ wic create ~/test.wks -o /home/trz/testwic --rootfs-dir
-      /home/trz/yocto/build/tmp/work/crownbay/core-image-minimal/1.0-r0/rootfs
-      --bootimg-dir /home/trz/yocto/build/tmp/sysroots/crownbay/usr/share
-      --kernel-dir /home/trz/yocto/build/tmp/sysroots/crownbay/usr/src/kernel
-      --native-sysroot /home/trz/yocto/build/tmp/sysroots/x86_64-linux
+      $ wic create ./test.wks -o ./out --rootfs-dir
+      tmp/work/qemux86_64-poky-linux/core-image-minimal/1.0-r0/rootfs
+      --bootimg-dir tmp/sysroots/qemux86-64/usr/share
+      --kernel-dir tmp/deploy/images/qemux86-64
+      --native-sysroot tmp/sysroots/x86_64-linux
 
-      Creating image(s)...
+     Creating image(s)...
 
-      Info: The new image(s) can be found here:
-        /home/trz/testwic/build/test-201309260032-sda.direct
+     Info: The new image(s) can be found here:
+           out/build/test-201507211313-sda.direct
 
-      ...
+     The following build artifacts were used to create the image(s):
+       ROOTFS_DIR:                   tmp/work/qemux86_64-poky-linux/core-image-minimal/1.0-r0/rootfs
+       BOOTIMG_DIR:                  tmp/sysroots/qemux86-64/usr/share
+       KERNEL_DIR:                   tmp/deploy/images/qemux86-64
+       NATIVE_SYSROOT:               tmp/sysroots/x86_64-linux
+
+     The image(s) were created using OE kickstart file:
+     ./test.wks
+
+     Here is a content of test.wks:
+
+     part /boot --source bootimg-pcbios --ondisk sda --label boot --active --align 1024
+     part / --source rootfs --ondisk sda --fstype=ext3 --label platform --align 1024
+
+     bootloader  --timeout=0  --append="rootwait rootfstype=ext3 video=vesafb vga=0x318 console=tty0"
+
 
     Finally, here's an example of the actual partition language
     commands used to generate the mkefidisk image i.e. these are the
@@ -673,10 +705,10 @@ DESCRIPTION
 
        The following are supported 'part' options:
 
-         --size: The minimum partition size in MBytes. Specify an
-                 integer value such as 500. Do not append the number
-                 with "MB". You do not need this option if you use
-                 --source.
+         --size: The minimum partition size. Specify an integer value
+                 such as 500. Multipliers k, M ang G can be used. If
+                 not specified, the size is in MB.
+                 You do not need this option if you use --source.
 
          --source: This option is a wic-specific option that names the
                    source of the data that will populate the
@@ -704,6 +736,10 @@ DESCRIPTION
                    Exactly what those contents and filesystem type end
                    up being are dependent on the given plugin
                    implementation.
+
+                   If --source option is not used, the wic command
+                   will create empty partition. --size parameter has
+                   to be used to specify size of empty partition.
 
          --ondisk or --ondrive: Forces the partition to be created on
                                 a particular disk.
@@ -736,6 +772,38 @@ DESCRIPTION
          --align (in KBytes): This option is specific to wic and says
                               to start a partition on an x KBytes
                               boundary.
+
+         --no-table: This option is specific to wic. Space will be
+                     reserved for the partition and it will be
+                     populated but it will not be added to the
+                     partition table. It may be useful for
+                     bootloaders.
+
+         --extra-space: This option is specific to wic. It adds extra
+                        space after the space filled by the content
+                        of the partition. The final size can go
+                        beyond the size specified by --size.
+                        By default, 10MB.
+
+         --overhead-factor: This option is specific to wic. The
+                            size of the partition is multiplied by
+                            this factor. It has to be greater than or
+                            equal to 1.
+                            The default value is 1.3.
+
+         --part-type: This option is specific to wic. It specifies partition
+                      type GUID for GPT partitions.
+                      List of partition type GUIDS can be found here:
+                      http://en.wikipedia.org/wiki/GUID_Partition_Table#Partition_type_GUIDs
+
+         --use-uuid: This option is specific to wic. It makes wic to generate
+                     random globally unique identifier (GUID) for the partition
+                     and use it in bootloader configuration to specify root partition.
+
+         --uuid: This option is specific to wic. It specifies partition UUID.
+                 It's useful if preconfigured partition UUID is added to kernel command line
+                 in bootloader configuration before running wic. In this case .wks file can
+                 be generated or modified to set preconfigured parition UUID using this option.
 
     * bootloader
 

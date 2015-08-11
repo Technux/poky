@@ -51,6 +51,22 @@
         that produce executable binaries (such as building the cross-compiler
         and a C library as pre-requisites, and splitting out of debug symbols
         during packaging).
+        <note>
+            Unlike e.g. Debian, OpenEmbedded recipes that produce packages
+            which
+            <link linkend='var-RDEPENDS'><filename>RDEPENDS</filename></link>
+            on
+            <link linkend='var-TUNE_PKGARCH'><filename>TUNE_PKGARCH</filename></link>
+            packages should never be made <filename>allarch</filename>, even
+            if they do not produce architecture-specific output. This would
+            cause the do_package_write_* tasks to have different signatures
+            for
+            <link linkend='var-MACHINE'><filename>MACHINE</filename></link>s
+            with different
+            <link linkend='var-TUNE_PKGARCH'><filename>TUNE_PKGARCH</filename></link>,
+            thus unnecessary rebuilds every single time an image for a different
+            MACHINE is built (even without any change to the recipe).
+        </note>
     </para>
 
     <para>
@@ -77,6 +93,10 @@
         For more details on the source archiver, see the
         "<ulink url='&YOCTO_DOCS_DEV_URL;#maintaining-open-source-license-compliance-during-your-products-lifecycle'>Maintaining Open Source License Compliance During Your Product's Lifecycle</ulink>"
         section in the Yocto Project Development Manual.
+        You can also see the
+        <link linkend='var-ARCHIVER_MODE'><filename>ARCHIVER_MODE</filename></link>
+        variable for information about the variable flags (varflags)
+        that help control archive creation.
     </para>
 </section>
 
@@ -116,19 +136,19 @@
         It's useful to have some idea of how the tasks defined by this class work
         and what they do behind the scenes.
         <itemizedlist>
-            <listitem><para><link linkend='ref-tasks-configure'><filename>do_configure</filename></link> &dash;
+            <listitem><para><link linkend='ref-tasks-configure'><filename>do_configure</filename></link> -
                 Regenerates the
                 configure script (using <filename>autoreconf</filename>) and then launches it
                 with a standard set of arguments used during cross-compilation.
                 You can pass additional parameters to <filename>configure</filename> through the
                 <filename><link linkend='var-EXTRA_OECONF'>EXTRA_OECONF</link></filename> variable.
                 </para></listitem>
-            <listitem><para><link linkend='ref-tasks-compile'><filename>do_compile</filename></link> &dash; Runs <filename>make</filename> with
+            <listitem><para><link linkend='ref-tasks-compile'><filename>do_compile</filename></link> - Runs <filename>make</filename> with
                 arguments that specify the compiler and linker.
                 You can pass additional arguments through
                 the <filename><link linkend='var-EXTRA_OEMAKE'>EXTRA_OEMAKE</link></filename> variable.
                 </para></listitem>
-            <listitem><para><link linkend='ref-tasks-install'><filename>do_install</filename></link> &dash; Runs <filename>make install</filename>
+            <listitem><para><link linkend='ref-tasks-install'><filename>do_install</filename></link> - Runs <filename>make install</filename>
                 and passes in
                 <filename>${</filename><link linkend='var-D'><filename>D</filename></link><filename>}</filename>
                 as <filename>DESTDIR</filename>.
@@ -267,6 +287,23 @@
      INHERIT += "blacklist"
      PNBLACKLIST[exoticware] = "Not supported by our organization."
         </literallayout>
+    </para>
+</section>
+
+<section id='ref-classes-bluetooth'>
+    <title><filename>bluetooth.bbclass</filename></title>
+
+    <para>
+        The <filename>bluetooth</filename> class defines a variable that
+        expands to the recipe (package) providing core
+        bluetooth support on the platform.
+    </para>
+
+    <para>
+        For details on how the class works, see the
+        <filename>meta/classes/bluetooth.bbclass</filename> file in the Yocto
+        Project
+        <ulink url='&YOCTO_DOCS_DEV_URL;#source-directory'>Source Directory</ulink>.
     </para>
 </section>
 
@@ -580,8 +617,8 @@
 
     <para>
         The <filename>debian</filename> class renames output packages so that
-        they follow the Debian naming policy (i.e. <filename>eglibc</filename>
-        becomes <filename>libc6</filename> and <filename>eglibc-devel</filename>
+        they follow the Debian naming policy (i.e. <filename>glibc</filename>
+        becomes <filename>libc6</filename> and <filename>glibc-devel</filename>
         becomes <filename>libc6-dev</filename>.)
         Renaming includes the library name and version as part of the package
         name.
@@ -839,7 +876,7 @@
         <literallayout class='monospaced'>
      inherit extrausers
      EXTRA_USERS_PARAMS = "\
-         useradd -P 1876*18 root; \
+         usermod -P 1876*18 root; \
          "
         </literallayout>
     </para>
@@ -1177,7 +1214,7 @@
         <link linkend='var-ICECC_DISABLED'><filename>ICECC_DISABLED</filename></link>
         variable to "1" as follows:
         <literallayout class='monospaced'>
-     INHERIT_DISTRO += "icecc"
+     INHERIT_DISTRO_append = " icecc"
      ICECC_DISABLED ??= "1"
         </literallayout>
         This practice makes sure everyone is using the same signatures but also
@@ -1680,7 +1717,11 @@
             <listitem><para><emphasis><filename>textrel:</filename></emphasis>
                 Checks for ELF binaries that contain relocations in their
                 <filename>.text</filename> sections, which can result in a
-                performance impact at runtime.</para></listitem>
+                performance impact at runtime.
+                See the explanation for the
+                <link linkend='qa-issue-textrel'><filename>ELF binary</filename></link>
+                message for more information regarding runtime performance issues.
+                </para></listitem>
             <listitem><para><emphasis><filename>unsafe-references-in-binaries:</filename></emphasis>
                 Reports when a binary installed in
                 <filename>${base_libdir}</filename>,
@@ -2072,7 +2113,8 @@
         You can create a recipe that builds tools that run on the SDK machine
         a couple different ways:
         <itemizedlist>
-            <listitem><para>Create a <replaceable>myrecipe</replaceable><filename>-nativesdk.bb</filename>
+            <listitem><para>Create a
+                <filename>nativesdk-</filename><replaceable>myrecipe</replaceable><filename>.bb</filename>
                 recipe that inherits the <filename>nativesdk</filename> class.
                 If you use this method, you must order the inherit statement
                 in the recipe after all other inherit statements so that the
@@ -2111,7 +2153,7 @@
     </para>
 
     <para>
-        A number of classes exist that are could be generally useful in
+        A number of classes exist that could be generally useful in
         OE-Core but are never actually used within OE-Core itself.
         The <filename>oelint</filename> class is one such example.
         However, being aware of this class can reduce the proliferation of
@@ -2160,6 +2202,11 @@
         <link linkend='ref-classes-package_ipk'><filename>package_ipk</filename></link>,
         and
         <link linkend='ref-classes-package_tar'><filename>package_tar</filename></link>.
+        <note><title>Warning</title>
+            The <filename>package_tar</filename> class is broken and not
+            supported.
+            It is recommended that you do not use this class.
+        </note>
     </para>
 
     <para>
@@ -2237,11 +2284,12 @@
 
     <para>
         The <filename>package_deb</filename> class
-        provides support for creating packages that use the
-        <filename>.deb</filename> file format.
-        The class ensures the packages are written out to the
-        <filename>${</filename><link linkend='var-DEPLOY_DIR'><filename>DEPLOY_DIR</filename></link><filename>}/deb</filename>
-        directory in a <filename>.deb</filename> file format.
+        provides support for creating packages that use the Debian
+        (i.e. <filename>.deb</filename>) file format.
+        The class ensures the packages are written out in a
+        <filename>.deb</filename> file format to the
+        <filename>${</filename><link linkend='var-DEPLOY_DIR_DEB'><filename>DEPLOY_DIR_DEB</filename></link><filename>}</filename>
+        directory.
     </para>
 
     <para>
@@ -2258,11 +2306,12 @@
 
     <para>
         The <filename>package_ipk</filename> class
-        provides support for creating packages that use the
-        <filename>.ipk</filename> file format.
-        The class ensures the packages are written out to the
-        <filename>${</filename><link linkend='var-DEPLOY_DIR'><filename>DEPLOY_DIR</filename></link><filename>}/ipk</filename>
-        directory in a <filename>.ipk</filename> file format.
+        provides support for creating packages that use the IPK
+        (i.e. <filename>.ipk</filename>) file format.
+        The class ensures the packages are written out in a
+        <filename>.ipk</filename> file format to the
+        <filename>${</filename><link linkend='var-DEPLOY_DIR_IPK'><filename>DEPLOY_DIR_IPK</filename></link><filename>}</filename>
+        directory.
     </para>
 
     <para>
@@ -2278,12 +2327,13 @@
     <title><filename>package_rpm.bbclass</filename></title>
 
     <para>
-        The <filename>package_deb</filename> class
-        provides support for creating packages that use the
-        <filename>.rpm</filename> file format.
-        The class ensures the packages are written out to the
-        <filename>${</filename><link linkend='var-DEPLOY_DIR'><filename>DEPLOY_DIR</filename></link><filename>}/rpm</filename>
-        directory in a <filename>.rpm</filename> file format.
+        The <filename>package_rpm</filename> class
+        provides support for creating packages that use the RPM
+        (i.e. <filename>.rpm</filename>) file format.
+        The class ensures the packages are written out in a
+        <filename>.rpm</filename> file format to the
+        <filename>${</filename><link linkend='var-DEPLOY_DIR_RPM'><filename>DEPLOY_DIR_RPM</filename></link><filename>}</filename>
+        directory.
     </para>
 
     <para>
@@ -2299,12 +2349,12 @@
     <title><filename>package_tar.bbclass</filename></title>
 
     <para>
-        The <filename>package_tar</filename>
-        class provides support for creating packages that use the
-        <filename>.tar</filename> file format.
-        The class ensures the packages are written out to the
-        <filename>${</filename><link linkend='var-DEPLOY_DIR'><filename>DEPLOY_DIR</filename></link><filename>}/tar</filename>
-        directory in a <filename>.tar</filename> file format.
+        The <filename>package_tar</filename> class
+        provides support for creating tarballs.
+        The class ensures the packages are written out in a
+        tarball format to the
+        <filename>${</filename><link linkend='var-DEPLOY_DIR_TAR'><filename>DEPLOY_DIR_TAR</filename></link><filename>}</filename>
+        directory.
     </para>
 
     <para>
@@ -2797,7 +2847,7 @@
         file.
         Here is an example:
         <literallayout class='monospaced'>
-    RM_WORK_EXCLUDE += "busybox eglibc"
+    RM_WORK_EXCLUDE += "busybox glibc"
         </literallayout>
     </para>
 </section>

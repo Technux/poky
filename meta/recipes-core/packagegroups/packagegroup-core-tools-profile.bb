@@ -19,15 +19,12 @@ PROFILE_TOOLS_SYSTEMD = "${@bb.utils.contains('DISTRO_FEATURES', 'systemd', 'sys
 RRECOMMENDS_${PN} = "\
     perf \
     trace-cmd \
-    kernel-module-oprofile \
     blktrace \
     ${PROFILE_TOOLS_X} \
     ${PROFILE_TOOLS_SYSTEMD} \
     "
 
 PROFILETOOLS = "\
-    oprofile \
-    oprofileui-server \
     powertop \
     latencytop \
     "
@@ -38,6 +35,7 @@ SYSTEMTAP = "systemtap"
 SYSTEMTAP_libc-uclibc = ""
 SYSTEMTAP_mips = ""
 SYSTEMTAP_mips64 = ""
+SYSTEMTAP_mips64n32 = ""
 SYSTEMTAP_aarch64 = ""
 
 # lttng-ust uses sched_getcpu() which is not there on uclibc
@@ -65,6 +63,7 @@ VALGRIND = "valgrind"
 VALGRIND_libc-uclibc = ""
 VALGRIND_mips = ""
 VALGRIND_mips64 = ""
+VALGRIND_mips64n32 = ""
 VALGRIND_arm = ""
 VALGRIND_aarch64 = ""
 

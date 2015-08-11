@@ -12,6 +12,7 @@ TOOLCHAIN_HOST_TASK ?= "\
     nativesdk-python-modules \
     nativesdk-python-misc \
     nativesdk-python-git \
+    nativesdk-python-pexpect \
     nativesdk-ncurses-terminfo-base \
     nativesdk-chrpath \
     nativesdk-tar \
@@ -28,12 +29,15 @@ SDK_PACKAGE_ARCHS =+ "buildtools-dummy-${SDKPKGSUFFIX}"
 
 TOOLCHAIN_OUTPUTNAME ?= "${SDK_NAME}-buildtools-nativesdk-standalone-${DISTRO_VERSION}"
 
+SDK_TITLE = "Build tools"
+
 RDEPENDS = "${TOOLCHAIN_HOST_TASK}"
 
 EXCLUDE_FROM_WORLD = "1"
 
 inherit meta
 inherit populate_sdk
+inherit toolchain-scripts
 
 create_sdk_files_append () {
 	rm -f ${SDK_OUTPUT}/${SDKPATH}/site-config-*

@@ -239,6 +239,66 @@ python () {
         d.appendVarFlag('do_package', 'deptask', " do_packagedata")
 }
 
+# Get a list of files from file vars by searching files under current working directory
+# The list contains symlinks, directories and normal files.
+def files_from_filevars(filevars):
+    import os,glob
+    cpath = oe.cachedpath.CachedPath()
+    files = []
+    for f in filevars:
+        if os.path.isabs(f):
+            f = '.' + f
+        if not f.startswith("./"):
+            f = './' + f
+        globbed = glob.glob(f)
+        if globbed:
+            if [ f ] != globbed:
+                files += globbed
+                continue
+        files.append(f)
+
+    for f in files:
+        if not cpath.islink(f):
+            if cpath.isdir(f):
+                newfiles = [ os.path.join(f,x) for x in os.listdir(f) ]
+                if newfiles:
+                    files += newfiles
+
+    return files
+
+# Called in package_<rpm,ipk,deb>.bbclass to get the correct list of configuration files
+def get_conffiles(pkg, d):
+    pkgdest = d.getVar('PKGDEST', True)
+    root = os.path.join(pkgdest, pkg)
+    cwd = os.getcwd()
+    os.chdir(root)
+
+    conffiles = d.getVar('CONFFILES_%s' % pkg, True);
+    if conffiles == None:
+        conffiles = d.getVar('CONFFILES', True)
+    if conffiles == None:
+        conffiles = ""
+    conffiles = conffiles.split()
+    conf_orig_list = files_from_filevars(conffiles)
+
+    # Remove links and directories from conf_orig_list to get conf_list which only contains normal files
+    conf_list = []
+    for f in conf_orig_list:
+        if os.path.isdir(f):
+            continue
+        if os.path.islink(f):
+            continue
+        if not os.path.exists(f):
+            continue
+        conf_list.append(f)
+
+    # Remove the leading './'
+    for i in range(0, len(conf_list)):
+        conf_list[i] = conf_list[i][1:]
+
+    os.chdir(cwd)
+    return conf_list
+
 def splitdebuginfo(file, debugfile, debugsrcdir, sourcefile, d):
     # Function to split a single file into two components, one is the stripped
     # target system binary, the other contains any debugging information. The
@@ -365,7 +425,7 @@ def get_package_mapping (pkg, basepkg, d):
 def get_package_additional_metadata (pkg_type, d):
     base_key = "PACKAGE_ADD_METADATA"
     for key in ("%s_%s" % (base_key, pkg_type.upper()), base_key):
-        if d.getVar(key) is None:
+        if d.getVar(key, False) is None:
             continue
         d.setVarFlag(key, "type", "list")
         if d.getVarFlag(key, "separator") is None:
@@ -403,9 +463,10 @@ python package_get_auto_pr() {
     if not (host is None):
         d.setVar("PRSERV_HOST", host)
 
+    pkgv = d.getVar("PKGV", True)
+
     # PR Server not active, handle AUTOINC
     if not d.getVar('PRSERV_HOST', True):
-        pkgv = d.getVar("PKGV", True)
         if 'AUTOINC' in pkgv:
             d.setVar("PKGV", pkgv.replace("AUTOINC", "0"))
         return
@@ -428,11 +489,11 @@ python package_get_auto_pr() {
         if conn is None:
             conn = oe.prservice.prserv_make_conn(d)
         if conn is not None:
-            if "AUTOINC" in pv:
+            if "AUTOINC" in pkgv:
                 srcpv = bb.fetch2.get_srcrev(d)
                 base_ver = "AUTOINC-%s" % version[:version.find(srcpv)]
                 value = conn.getPR(base_ver, pkgarch, srcpv)
-                d.setVar("PKGV", pv.replace("AUTOINC", str(value)))
+                d.setVar("PKGV", pkgv.replace("AUTOINC", str(value)))
 
             auto_pr = conn.getPR(version, pkgarch, checksum)
     except Exception as e:
@@ -814,8 +875,8 @@ python split_and_strip_files () {
     #
     elffiles = {}
     symlinks = {}
-    hardlinks = {}
     kernmods = []
+    inodes = {}
     libdir = os.path.abspath(dvar + os.sep + d.getVar("libdir", True))
     baselibdir = os.path.abspath(dvar + os.sep + d.getVar("base_libdir", True))
     if (d.getVar('INHIBIT_PACKAGE_STRIP', True) != '1'):
@@ -853,6 +914,7 @@ python split_and_strip_files () {
                             #bb.note("Sym: %s (%d)" % (ltarget, isELF(ltarget)))
                             symlinks[file] = target
                         continue
+
                     # It's a file (or hardlink), not a link
                     # ...but is it ELF, and is it already stripped?
                     elf_file = isELF(file)
@@ -864,28 +926,30 @@ python split_and_strip_files () {
                                 msg = "File '%s' from %s was already stripped, this will prevent future debugging!" % (file[len(dvar):], pn)
                                 package_qa_handle_error("already-stripped", msg, d)
                             continue
-                        # Check if it's a hard link to something else
-                        if s.st_nlink > 1:
-                            file_reference = "%d_%d" % (s.st_dev, s.st_ino)
-                            # Hard link to something else
-                            hardlinks[file] = file_reference
-                            continue
-                        elffiles[file] = elf_file
+
+                        # At this point we have an unstripped elf file. We need to:
+                        #  a) Make sure any file we strip is not hardlinked to anything else outside this tree
+                        #  b) Only strip any hardlinked file once (no races)
+                        #  c) Track any hardlinks between files so that we can reconstruct matching debug file hardlinks
+
+                        # Use a reference of device ID and inode number to indentify files
+                        file_reference = "%d_%d" % (s.st_dev, s.st_ino)
+                        if file_reference in inodes:
+                            os.unlink(file)
+                            os.link(inodes[file_reference][0], file)
+                            inodes[file_reference].append(file)
+                        else:
+                            inodes[file_reference] = [file]
+                            # break hardlink
+                            bb.utils.copyfile(file, file)
+                            elffiles[file] = elf_file
+                        # Modified the file so clear the cache
+                        cpath.updatecache(file)
 
     #
     # First lets process debug splitting
     #
     if (d.getVar('INHIBIT_PACKAGE_DEBUG_SPLIT', True) != '1'):
-        hardlinkmap = {}
-        # For hardlinks, process only one of the files
-        for file in hardlinks:
-            file_reference = hardlinks[file]
-            if file_reference not in hardlinkmap:
-                # If this is a new file, add it as a reference, and
-                # update it's type, so we can fall through and split
-                elffiles[file] = isELF(file)
-                hardlinkmap[file_reference] = file
-
         for file in elffiles:
             src = file[len(dvar):]
             dest = debuglibdir + os.path.dirname(src) + debugdir + "/" + os.path.basename(src) + debugappend
@@ -898,13 +962,14 @@ python split_and_strip_files () {
             splitdebuginfo(file, fpath, debugsrcdir, sourcefile, d)
 
         # Hardlink our debug symbols to the other hardlink copies
-        for file in hardlinks:
-            if file not in elffiles:
+        for ref in inodes:
+            if len(inodes[ref]) == 1:
+                continue
+            for file in inodes[ref][1:]:
                 src = file[len(dvar):]
                 dest = debuglibdir + os.path.dirname(src) + debugdir + "/" + os.path.basename(src) + debugappend
                 fpath = dvar + dest
-                file_reference = hardlinks[file]
-                target = hardlinkmap[file_reference][len(dvar):]
+                target = inodes[ref][0][len(dvar):]
                 ftarget = dvar + debuglibdir + os.path.dirname(target) + debugdir + "/" + os.path.basename(target) + debugappend
                 bb.utils.mkdirhier(os.path.dirname(fpath))
                 #bb.note("Link %s -> %s" % (fpath, ftarget))
@@ -976,14 +1041,11 @@ python populate_packages () {
     bb.utils.mkdirhier(outdir)
     os.chdir(dvar)
 
-    # Sanity check PACKAGES for duplicates and for LICENSE_EXCLUSION
+    # Sanity check PACKAGES for duplicates
     # Sanity should be moved to sanity.bbclass once we have the infrastucture
     package_list = []
 
     for pkg in packages.split():
-        if d.getVar('LICENSE_EXCLUSION-' + pkg, True):
-            msg = "%s has an incompatible license. Excluding from packaging." % pkg
-            package_qa_handle_error("incompatible-license", msg, d)
         if pkg in package_list:
             msg = "%s is listed in PACKAGES multiple times, this leads to packaging errors." % pkg
             package_qa_handle_error("packages-list", msg, d)
@@ -1008,34 +1070,14 @@ python populate_packages () {
             filesvar.replace("//", "/")
 
         origfiles = filesvar.split()
-        files = []
-        for file in origfiles:
-            if os.path.isabs(file):
-                file = '.' + file
-            if not file.startswith("./"):
-                file = './' + file
-            globbed = glob.glob(file)
-            if globbed:
-                if [ file ] != globbed:
-                    files += globbed
-                    continue
-            files.append(file)
+        files = files_from_filevars(origfiles)
 
         for file in files:
-            if not cpath.islink(file):
-                if cpath.isdir(file):
-                    newfiles =  [ os.path.join(file,x) for x in os.listdir(file) ]
-                    if newfiles:
-                        files += newfiles
-                        continue
             if (not cpath.islink(file)) and (not cpath.exists(file)):
                 continue
             if file in seen:
                 continue
             seen.append(file)
-
-            if d.getVar('LICENSE_EXCLUSION-' + pkg, True):
-                continue
 
             def mkdir(src, dest, p):
                 src = os.path.join(src, p)
@@ -1077,6 +1119,16 @@ python populate_packages () {
     os.umask(oldumask)
     os.chdir(workdir)
 
+    # Handle LICENSE_EXCLUSION
+    package_list = []
+    for pkg in packages.split():
+        if d.getVar('LICENSE_EXCLUSION-' + pkg, True):
+            msg = "%s has an incompatible license. Excluding from packaging." % pkg
+            package_qa_handle_error("incompatible-license", msg, d)
+        else:
+            package_list.append(pkg)
+    d.setVar('PACKAGES', ' '.join(package_list))
+
     unshipped = []
     for root, dirs, files in cpath.walk(dvar):
         dir = root[len(dvar):]
@@ -1088,12 +1140,13 @@ python populate_packages () {
                 unshipped.append(path)
 
     if unshipped != []:
-        msg = pn + ": Files/directories were installed but not shipped"
+        msg = pn + ": Files/directories were installed but not shipped in any package:"
         if "installed-vs-shipped" in (d.getVar('INSANE_SKIP_' + pn, True) or "").split():
             bb.note("Package %s skipping QA tests: installed-vs-shipped" % pn)
         else:
             for f in unshipped:
                 msg = msg + "\n  " + f
+            msg = msg + "\nPlease set FILES such that these items are packaged. Alternatively if they are unneeded, avoid installing them or delete them within do_install."
             package_qa_handle_error("installed-vs-shipped", msg, d)
 }
 populate_packages[dirs] = "${D}"
@@ -1101,7 +1154,7 @@ populate_packages[dirs] = "${D}"
 python package_fixsymlinks () {
     import errno
     pkgdest = d.getVar('PKGDEST', True)
-    packages = d.getVar("PACKAGES").split()
+    packages = d.getVar("PACKAGES", False).split()
 
     dangling_links = {}
     pkg_files = {}
@@ -1574,7 +1627,7 @@ python package_do_shlibs() {
             # /opt/abc/lib/libfoo.so.1 and contains /usr/bin/abc depending on system library libfoo.so.1
             # but skipping it is still better alternative than providing own
             # version and then adding runtime dependency for the same system library
-            if private_libs and n in private_libs:
+            if private_libs and n[0] in private_libs:
                 bb.debug(2, '%s: Dependency %s covered by PRIVATE_LIBS' % (pkg, n[0]))
                 continue
             if n[0] in shlib_provider.keys():
@@ -1864,7 +1917,7 @@ python package_depchains() {
 
 # Since bitbake can't determine which variables are accessed during package
 # iteration, we need to list them here:
-PACKAGEVARS = "FILES RDEPENDS RRECOMMENDS SUMMARY DESCRIPTION RSUGGESTS RPROVIDES RCONFLICTS PKG ALLOW_EMPTY pkg_postinst pkg_postrm INITSCRIPT_NAME INITSCRIPT_PARAMS DEBIAN_NOAUTONAME ALTERNATIVE PKGE PKGV PKGR USERADD_PARAM GROUPADD_PARAM CONFFILES"
+PACKAGEVARS = "FILES RDEPENDS RRECOMMENDS SUMMARY DESCRIPTION RSUGGESTS RPROVIDES RCONFLICTS PKG ALLOW_EMPTY pkg_postinst pkg_postrm INITSCRIPT_NAME INITSCRIPT_PARAMS DEBIAN_NOAUTONAME ALTERNATIVE PKGE PKGV PKGR USERADD_PARAM GROUPADD_PARAM CONFFILES SYSTEMD_SERVICE LICENSE SECTION pkg_preinst pkg_prerm RREPLACES GROUPMEMS_PARAM SYSTEMD_AUTO_ENABLE"
 
 def gen_packagevar(d):
     ret = []

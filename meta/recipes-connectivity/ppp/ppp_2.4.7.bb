@@ -29,6 +29,7 @@ SRC_URI = "http://ppp.samba.org/ftp/ppp/ppp-${PV}.tar.gz \
            file://provider \
            file://0001-ppp-Fix-compilation-errors-in-Makefile.patch \
            file://ppp@.service \
+           file://fix-CVE-2015-3310.patch \
 "
 
 SRC_URI[md5sum] = "78818f40e6d33a1d1de68a1551f6595a"
@@ -43,7 +44,11 @@ EXTRA_OECONF = "--disable-strip"
 # Package Makefile computes CFLAGS, referencing COPTS.
 # Typically hard-coded to '-O2 -g' in the Makefile's.
 #
-EXTRA_OEMAKE += ' COPTS="${CFLAGS}"'
+EXTRA_OEMAKE += ' COPTS="${CFLAGS} -I${S}/include"'
+
+do_configure () {
+	oe_runconf
+}
 
 do_install_append () {
 	make install-etcppp ETCDIR=${D}/${sysconfdir}/ppp

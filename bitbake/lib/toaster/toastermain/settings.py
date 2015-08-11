@@ -49,6 +49,12 @@ DATABASES = {
     }
 }
 
+# Needed when Using sqlite especially to add a longer timeout for waiting
+# for the database lock to be  released
+# https://docs.djangoproject.com/en/1.6/ref/databases/#database-is-locked-errors
+if 'sqlite' in DATABASES['default']['ENGINE']:
+    DATABASES['default']['OPTIONS'] = { 'timeout': 20 }
+
 # Reinterpret database settings if we have DATABASE_URL environment variable defined
 
 if 'DATABASE_URL' in os.environ:
@@ -215,8 +221,25 @@ MIDDLEWARE_CLASSES = (
     # 'django.middleware.clickjacking.XFrameOptionsMiddleware',
 )
 
+CACHES = {
+    #        'default': {
+    #            'BACKEND': 'django.core.cache.backends.memcached.MemcachedCache',
+    #            'LOCATION': '127.0.0.1:11211',
+    #        },
+           'default': {
+               'BACKEND': 'django.core.cache.backends.filebased.FileBasedCache',
+               'LOCATION': '/tmp/django-default-cache',
+               'TIMEOUT': 1,
+            }
+          }
+
+
 from os.path import dirname as DN
 SITE_ROOT=DN(DN(os.path.abspath(__file__)))
+
+import subprocess
+TOASTER_BRANCH = subprocess.Popen('git branch | grep "^* " | tr -d "* "', cwd = SITE_ROOT, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE).communicate()[0]
+TOASTER_REVISION = subprocess.Popen('git rev-parse HEAD ', cwd = SITE_ROOT, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE).communicate()[0]
 
 ROOT_URLCONF = 'toastermain.urls'
 
@@ -241,40 +264,59 @@ TEMPLATE_CONTEXT_PROCESSORS = ('django.contrib.auth.context_processors.auth',
  )
 
 INSTALLED_APPS = (
-    #'django.contrib.sites',
+    'django.contrib.auth',
+    'django.contrib.contenttypes',
+    'django.contrib.messages',
+    'django.contrib.sessions',
+    'django.contrib.admin',
     'django.contrib.staticfiles',
+
     # Uncomment the next line to enable admin documentation:
     # 'django.contrib.admindocs',
     'django.contrib.humanize',
-    'orm',
+    'bldcollector',
     'toastermain',
     'south',
 )
 
+
+INTERNAL_IPS = ['127.0.0.1', '192.168.2.28']
 
 # Load django-fresh is TOASTER_DEVEL is set, and the module is available
 FRESH_ENABLED = False
 if os.environ.get('TOASTER_DEVEL', None) is not None:
     try:
         import fresh
-        MIDDLEWARE_CLASSES = MIDDLEWARE_CLASSES + ("fresh.middleware.FreshMiddleware",)
+        MIDDLEWARE_CLASSES = ("fresh.middleware.FreshMiddleware",) + MIDDLEWARE_CLASSES
         INSTALLED_APPS = INSTALLED_APPS + ('fresh',)
         FRESH_ENABLED = True
     except:
         pass
 
+DEBUG_PANEL_ENABLED = False
+if os.environ.get('TOASTER_DEVEL', None) is not None:
+    try:
+        import debug_toolbar, debug_panel
+        MIDDLEWARE_CLASSES = ('debug_panel.middleware.DebugPanelMiddleware',) + MIDDLEWARE_CLASSES
+        #MIDDLEWARE_CLASSES = MIDDLEWARE_CLASSES + ('debug_toolbar.middleware.DebugToolbarMiddleware',)
+        INSTALLED_APPS = INSTALLED_APPS + ('debug_toolbar','debug_panel',)
+        DEBUG_PANEL_ENABLED = True
+
+        # this cache backend will be used by django-debug-panel
+        CACHES['debug-panel'] = {
+                'BACKEND': 'django.core.cache.backends.filebased.FileBasedCache',
+                'LOCATION': '/var/tmp/debug-panel-cache',
+                'TIMEOUT': 300,
+                'OPTIONS': {
+                    'MAX_ENTRIES': 200
+                }
+        }
+
+    except:
+        pass
+
 
 SOUTH_TESTS_MIGRATE = False
-
-# if we run in managed mode, we need user support
-if MANAGED:
-    INSTALLED_APPS = ('django.contrib.auth',
-    'django.contrib.contenttypes',
-    'django.contrib.messages',
-    'django.contrib.sessions',
-    # Uncomment the next line to enable the admin:
-    'django.contrib.admin',
-        ) + INSTALLED_APPS
 
 
 # We automatically detect and install applications here if
@@ -305,7 +347,7 @@ LOGGING = {
     },
     'formatters': {
         'datetime': {
-            'format': '%(levelname)s %(asctime)s %(message)s'
+            'format': '%(asctime)s %(levelname)s %(message)s'
         }
     },
     'handlers': {
@@ -326,8 +368,8 @@ LOGGING = {
             'level': 'DEBUG',
         },
         'django.request': {
-            'handlers': ['mail_admins'],
-            'level': 'ERROR',
+            'handlers': ['console'],
+            'level': 'WARN',
             'propagate': True,
         },
     }
@@ -350,3 +392,19 @@ connection_created.connect(activate_synchronous_off)
 #
 
 
+class InvalidString(str):
+    def __mod__(self, other):
+        from django.template.base import TemplateSyntaxError
+        raise TemplateSyntaxError(
+            "Undefined variable or unknown value for: \"%s\"" % other)
+
+TEMPLATE_STRING_IF_INVALID = InvalidString("%s")
+
+import sys
+sys.path.append(
+    os.path.join(
+    os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "contrib"),
+            "django-aggregate-if-master")
+    )

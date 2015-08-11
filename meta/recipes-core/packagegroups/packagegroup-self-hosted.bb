@@ -7,7 +7,9 @@ DESCRIPTION = "Packages required to run the build system"
 PR = "r13"
 LICENSE = "MIT"
 
-inherit packagegroup
+inherit packagegroup  distro_features_check
+# rdepends on libx11-dev
+REQUIRED_DISTRO_FEATURES = "x11"
 
 PACKAGES = "\
     packagegroup-self-hosted \
@@ -29,6 +31,7 @@ RDEPENDS_packagegroup-self-hosted = "\
 # midori depends on webkit-gtk which could not build for mips64
 MIDORI = "midori"
 MIDORI_mips64 = ""
+MIDORI_mips64n32 = ""
 
 RDEPENDS_packagegroup-self-hosted-host-tools = "\
     connman \
@@ -59,7 +62,6 @@ RRECOMMENDS_packagegroup-self-hosted-host-tools = "\
     kernel-module-iptable-filter \
 	"
 
-# glibc-utils: for rpcgen
 RDEPENDS_packagegroup-self-hosted-sdk = "\
     autoconf \
     automake \
@@ -70,7 +72,6 @@ RDEPENDS_packagegroup-self-hosted-sdk = "\
     cpp \
     cpp-symlinks \
     distcc \
-    glibc-utils \
     glibc-gconv-ibm850 \
     file \
     findutils \
@@ -95,7 +96,10 @@ RDEPENDS_packagegroup-self-hosted-sdk = "\
     quilt \
     sed \
     "
-
+# glibc-utils: for rpcgen
+RDEPENDS_packagegroup-self-hosted-sdk_append_libc-glibc = "\
+    glibc-utils \
+    "
 RDEPENDS_packagegroup-self-hosted-debug = " \
     gdb \
     gdbserver \
@@ -114,7 +118,6 @@ RDEPENDS_packagegroup-self-hosted-extended = "\
     diffutils \
     elfutils \
     expat \
-    gamin \
     gawk \
     gdbm \
     gettext \
@@ -154,37 +157,11 @@ RDEPENDS_packagegroup-self-hosted-extended = "\
     perl-pod \
     ${PTH} \
     python \
-    python-compile \
     python-compiler \
-    python-compression \
-    python-core \
-    python-curses \
-    python-datetime \
-    python-difflib \
-    python-distutils \
-    python-elementtree \
-    python-email \
-    python-fcntl \
     python-git \
-    python-json \
-    python-logging \
     python-misc \
-    python-mmap \
-    python-multiprocessing \
-    python-netclient \
-    python-netserver \
-    python-pickle \
-    python-pkgutil \
-    python-pprint \
-    python-re \
+    python-modules \
     python-rpm \
-    python-shell \
-    python-sqlite3 \
-    python-subprocess \
-    python-textutils \
-    python-unittest \
-    python-unixadmin \
-    python-xmlrpc \
     quota \
     readline \
     rpm \

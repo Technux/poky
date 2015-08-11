@@ -62,12 +62,10 @@ do_compile () {
 	oe_runmake all-host configure-target-libgcc
 }
 
-INHIBIT_PACKAGE_STRIP = "1"
-
 # Having anything auto depending on gcc-cross-sdk is a really bad idea...
 EXCLUDE_FROM_SHLIBS = "1"
 
-PACKAGES = "${PN} ${PN}-doc"
+PACKAGES = "${PN}-dbg ${PN} ${PN}-doc"
 
 FILES_${PN} = "\
     ${exec_prefix}/bin/* \
@@ -85,6 +83,11 @@ FILES_${PN} = "\
     ${prefix}/${TARGET_SYS}/usr/include/* \
 "
 INSANE_SKIP_${PN} += "dev-so"
+
+FILES_${PN}-dbg += " \
+    ${libexecdir}/gcc/${TARGET_SYS}/${BINV}/.debug \
+    ${libexecdir}/gcc/${TARGET_SYS}/${BINV}/plugin/.debug \
+"
 
 FILES_${PN}-doc = "\
     ${infodir} \
@@ -138,6 +141,8 @@ do_install () {
 
 		ln -sf ${BINRELPATH}/${TARGET_PREFIX}$t$suffix $dest$t$suffix
 	done
+	t=real-ld
+	ln -sf ${BINRELPATH}/${TARGET_PREFIX}ld$suffix $dest$t$suffix
 
 	# libquadmath headers need to  be available in the gcc libexec dir
 	install -d ${D}${libdir}/gcc/${TARGET_SYS}/${BINV}/include/

@@ -41,9 +41,9 @@ import sys
 import time
 import xmlrpclib
 
-featureSet = [bb.cooker.CookerFeatures.HOB_EXTRA_CACHES, bb.cooker.CookerFeatures.SEND_DEPENDS_TREE, bb.cooker.CookerFeatures.BASEDATASTORE_TRACKING]
+featureSet = [bb.cooker.CookerFeatures.HOB_EXTRA_CACHES, bb.cooker.CookerFeatures.SEND_DEPENDS_TREE, bb.cooker.CookerFeatures.BASEDATASTORE_TRACKING, bb.cooker.CookerFeatures.SEND_SANITYEVENTS]
 
-logger = logging.getLogger("BitBake")
+logger = logging.getLogger("ToasterLogger")
 interactive = sys.stdout.isatty()
 
 
@@ -58,10 +58,14 @@ def _log_settings_from_server(server):
     if error:
         logger.error("Unable to get the value of BBINCLUDELOGS_LINES variable: %s" % error)
         raise BaseException(error)
-    return includelogs, loglines
+    consolelogfile, error = server.runCommand(["getVariable", "BB_CONSOLELOG"])
+    if error:
+        logger.error("Unable to get the value of BB_CONSOLELOG variable: %s" % error)
+        raise BaseException(error)
+    return includelogs, loglines, consolelogfile
+
 
 def main(server, eventHandler, params ):
-
     helper = uihelper.BBUIHelper()
 
     console = logging.StreamHandler(sys.stdout)
@@ -70,8 +74,9 @@ def main(server, eventHandler, params ):
     bb.msg.addDefaultlogFilter(console)
     console.setFormatter(format)
     logger.addHandler(console)
+    logger.setLevel(logging.INFO)
 
-    includelogs, loglines = _log_settings_from_server(server)
+    includelogs, loglines, consolelogfile = _log_settings_from_server(server)
 
     # verify and warn
     build_history_enabled = True
@@ -83,7 +88,7 @@ def main(server, eventHandler, params ):
 
     if not params.observe_only:
         logger.error("ToasterUI can only work in observer mode")
-        return
+        return 1
 
 
     main.shutdown = 0
@@ -95,6 +100,16 @@ def main(server, eventHandler, params ):
     first = True
 
     buildinfohelper = BuildInfoHelper(server, build_history_enabled)
+
+    if buildinfohelper.brbe is not None and consolelogfile:
+        # if we are under managed mode we have no other UI and we need to write our own file
+        bb.utils.mkdirhier(os.path.dirname(consolelogfile))
+        conlogformat = bb.msg.BBLogFormatter(format_str)
+        consolelog = logging.FileHandler(consolelogfile)
+        bb.msg.addDefaultlogFilter(consolelog)
+        consolelog.setFormatter(conlogformat)
+        logger.addHandler(consolelog)
+
 
     while True:
         try:
@@ -115,17 +130,23 @@ def main(server, eventHandler, params ):
 
             if isinstance(event, (bb.build.TaskStarted, bb.build.TaskSucceeded, bb.build.TaskFailedSilent)):
                 buildinfohelper.update_and_store_task(event)
+                logger.warn("Logfile for task %s" % event.logfile)
                 continue
+
+            if isinstance(event, bb.build.TaskBase):
+                logger.info(event._message)
 
             if isinstance(event, bb.event.LogExecTTY):
                 logger.warn(event.msg)
                 continue
 
             if isinstance(event, logging.LogRecord):
+                if event.levelno == -1:
+                    event.levelno = format.ERROR
+
                 buildinfohelper.store_log_event(event)
                 if event.levelno >= format.ERROR:
                     errors = errors + 1
-                    return_value = 1
                 elif event.levelno == format.WARNING:
                     warnings = warnings + 1
                 # For "normal" logging conditions, don't show note logs from tasks
@@ -139,7 +160,6 @@ def main(server, eventHandler, params ):
 
             if isinstance(event, bb.build.TaskFailed):
                 buildinfohelper.update_and_store_task(event)
-                return_value = 1
                 logfile = event.logfile
                 if logfile and os.path.exists(logfile):
                     bb.error("Logfile of failure stored in: %s" % logfile)
@@ -162,9 +182,13 @@ def main(server, eventHandler, params ):
             if isinstance(event, bb.event.CacheLoadCompleted):
                 continue
             if isinstance(event, bb.event.MultipleProviders):
+                logger.info("multiple providers are available for %s%s (%s)", event._is_runtime and "runtime " or "",
+                            event._item,
+                            ", ".join(event._candidates))
+                logger.info("consider defining a PREFERRED_PROVIDER entry to match %s", event._item)
                 continue
+
             if isinstance(event, bb.event.NoProvider):
-                return_value = 1
                 errors = errors + 1
                 if event._runtime:
                     r = "R"
@@ -214,26 +238,19 @@ def main(server, eventHandler, params ):
             if isinstance(event, (bb.event.TreeDataPreparationStarted, bb.event.TreeDataPreparationCompleted)):
                 continue
 
-            if isinstance(event, (bb.event.BuildCompleted)):
-                continue
+            if isinstance(event, (bb.event.BuildCompleted, bb.command.CommandFailed)):
 
-            if isinstance(event, (bb.command.CommandCompleted,
-                                  bb.command.CommandFailed,
-                                  bb.command.CommandExit)):
-                errorcode = 0
+		errorcode = 0
                 if (isinstance(event, bb.command.CommandFailed)):
-                    event.levelno = format.ERROR
-                    event.msg = "Command Failed " + event.error
-                    event.pathname = ""
-                    event.lineno = 0
-                    buildinfohelper.store_log_event(event)
                     errors += 1
                     errorcode = 1
+                    logger.error("Command execution failed: %s", event.error)
 
+                # update the build info helper on BuildCompleted, not on CommandXXX
                 buildinfohelper.update_build_information(event, errors, warnings, taskfailures)
                 buildinfohelper.close(errorcode)
                 # mark the log output; controllers may kill the toasterUI after seeing this log
-                logger.info("ToasterUI build done")
+                logger.info("ToasterUI build done 1, brbe: %s" % buildinfohelper.brbe )
 
                 # we start a new build info
                 if buildinfohelper.brbe is not None:
@@ -246,6 +263,14 @@ def main(server, eventHandler, params ):
                     warnings = 0
                     taskfailures = []
                     buildinfohelper = BuildInfoHelper(server, build_history_enabled)
+
+                logger.info("ToasterUI build done 2")
+                continue
+
+            if isinstance(event, (bb.command.CommandCompleted,
+                                  bb.command.CommandFailed,
+                                  bb.command.CommandExit)):
+                errorcode = 0
 
                 continue
 
@@ -291,6 +316,7 @@ def main(server, eventHandler, params ):
                 continue
 
             logger.error("Unknown event: %s", event)
+            return_value += 1
 
         except EnvironmentError as ioerror:
             # ignore interrupted io
@@ -302,8 +328,16 @@ def main(server, eventHandler, params ):
         except Exception as e:
             # print errors to log
             import traceback
+            from pprint import pformat
             exception_data = traceback.format_exc()
             logger.error("%s\n%s" % (e, exception_data))
+
+            exc_type, exc_value, tb = sys.exc_info()
+            if tb is not None:
+                curr = tb
+                while curr is not None:
+                    logger.warn("Error data dump %s\n%s\n" % (traceback.format_tb(curr,1), pformat(curr.tb_frame.f_locals)))
+                    curr = curr.tb_next
 
             # save them to database, if possible; if it fails, we already logged to console.
             try:
@@ -311,10 +345,13 @@ def main(server, eventHandler, params ):
             except Exception as ce:
                 logger.error("CRITICAL - Failed to to save toaster exception to the database: %s" % str(ce))
 
+            # make sure we return with an error
+            return_value += 1
             pass
 
     if interrupted:
         if return_value == 0:
-            return_value = 1
+            return_value += 1
 
+    logger.warn("Return value is %d", return_value)
     return return_value

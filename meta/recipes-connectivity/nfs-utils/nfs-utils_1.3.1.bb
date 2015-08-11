@@ -28,13 +28,13 @@ SRC_URI = "${KERNELORG_MIRROR}/linux/utils/nfs-utils/${PV}/nfs-utils-${PV}.tar.x
            file://nfs-server.service \
            file://nfs-mountd.service \
            file://nfs-statd.service \
+           file://proc-fs-nfsd.mount \
            file://nfs-utils-Do-not-pass-CFLAGS-to-gcc-while-building.patch \
+           file://nfs-utils-debianize-start-statd.patch \
 "
 
 SRC_URI[md5sum] = "8de676b9ff34b8f9addc1d0800fabdf8"
 SRC_URI[sha256sum] = "ff79d70b7b58b2c8f9b798c58721127e82bb96022adc04a5c4cb251630e696b8"
-
-PARALLEL_MAKE = ""
 
 # Only kernel-module-nfsd is required here (but can be built-in)  - the nfsd module will
 # pull in the remainder of the dependencies.
@@ -70,15 +70,25 @@ PACKAGECONFIG[nfsidmap] = "--enable-nfsidmap,--disable-nfsidmap,keyutils"
 INHIBIT_AUTO_STAGE = "1"
 
 PACKAGES =+ "${PN}-client ${PN}-stats"
+
+CONFFILES_${PN}-client += "${localstatedir}/lib/nfs/etab \
+			   ${localstatedir}/lib/nfs/rmtab \
+			   ${localstatedir}/lib/nfs/xtab \
+			   ${localstatedir}/lib/nfs/statd/state \
+			   ${sysconfdir}/nfsmount.conf"
+
 FILES_${PN}-client = "${base_sbindir}/*mount.nfs* ${sbindir}/*statd \
 		      ${sbindir}/rpc.idmapd ${sbindir}/sm-notify \
 		      ${sbindir}/showmount ${sbindir}/nfsstat \
 		      ${localstatedir}/lib/nfs \
 		      ${sysconfdir}/nfs-utils.conf \
+		      ${sysconfdir}/nfsmount.conf \
 		      ${sysconfdir}/init.d/nfscommon \
 		      ${systemd_unitdir}/system/nfs-statd.service"
 FILES_${PN}-stats = "${sbindir}/mountstats ${sbindir}/nfsiostat"
 RDEPENDS_${PN}-stats = "python"
+
+FILES_${PN} += "${systemd_unitdir}"
 
 # Make clean needed because the package comes with
 # precompiled 64-bit objects that break the build
@@ -92,6 +102,8 @@ do_install_append () {
 	install -m 0755 ${WORKDIR}/nfscommon ${D}${sysconfdir}/init.d/nfscommon
 
 	install -m 0755 ${WORKDIR}/nfs-utils.conf ${D}${sysconfdir}
+	install -m 0755 ${S}/utils/mount/nfsmount.conf ${D}${sysconfdir}
+
 	install -d ${D}${systemd_unitdir}/system
 	install -m 0644 ${WORKDIR}/nfs-server.service ${D}${systemd_unitdir}/system/
 	install -m 0644 ${WORKDIR}/nfs-mountd.service ${D}${systemd_unitdir}/system/
@@ -99,6 +111,13 @@ do_install_append () {
 	sed -i -e 's,@SBINDIR@,${sbindir},g' \
 		-e 's,@SYSCONFDIR@,${sysconfdir},g' \
 		${D}${systemd_unitdir}/system/*.service
+	if ${@bb.utils.contains('DISTRO_FEATURES','systemd','true','false',d)}; then
+	    install -d ${D}${sysconfdir}/modules-load.d
+	    echo "nfsd" > ${D}${sysconfdir}/modules-load.d/nfsd.conf
+	    install -m 0644 ${WORKDIR}/proc-fs-nfsd.mount ${D}${systemd_unitdir}/system/
+	    install -d ${D}${systemd_unitdir}/system/sysinit.target.wants/
+	    ln -sf ../proc-fs-nfsd.mount ${D}${systemd_unitdir}/system/sysinit.target.wants/proc-fs-nfsd.mount
+	fi
 
 	# kernel code as of 3.8 hard-codes this path as a default
 	install -d ${D}/var/lib/nfs/v4recovery

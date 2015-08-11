@@ -162,7 +162,7 @@ python toaster_image_dumpdata() {
                     import stat
                     artifact_path = os.path.join(dirpath, fn)
                     filestat = os.stat(artifact_path)
-                    if stat.S_ISREG(filestat.st_mode):
+                    if not os.path.islink(artifact_path):
                         artifact_info_data[artifact_path] = filestat.st_size
             except OSError as e:
                 bb.event.fire(bb.event.MetadataEvent("OSErrorException", e), d)
@@ -192,7 +192,7 @@ python toaster_collect_task_stats() {
             bn = get_bn(e)
             bsdir = os.path.join(e.data.getVar('BUILDSTATS_BASE', True), bn)
             taskdir = os.path.join(bsdir, e.data.expand("${PF}"))
-            fout.write("%s:%s:%s:%s\n" % (e.taskfile, e.taskname, os.path.join(taskdir, e.task), e.data.expand("${PN}")))
+            fout.write("%s::%s::%s::%s\n" % (e.taskfile, e.taskname, os.path.join(taskdir, e.task), e.data.expand("${PN}")))
 
         bb.utils.unlockfile(lock)
 
@@ -245,7 +245,7 @@ python toaster_collect_task_stats() {
         events = []
         with open(os.path.join(e.data.getVar('BUILDSTATS_BASE', True), "toasterstatlist"), "r") as fin:
             for line in fin:
-                (taskfile, taskname, filename, recipename) = line.strip().split(":")
+                (taskfile, taskname, filename, recipename) = line.strip().split("::")
                 events.append((taskfile, taskname, _read_stats(filename), recipename))
         bb.event.fire(bb.event.MetadataEvent("BuildStatsList", events), e.data)
         os.unlink(os.path.join(e.data.getVar('BUILDSTATS_BASE', True), "toasterstatlist"))

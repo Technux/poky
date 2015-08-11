@@ -12,6 +12,7 @@ PTEST_ENABLED_class-nativesdk = ""
 PTEST_ENABLED_class-cross-canadian = ""
 RDEPENDS_${PN}-ptest_class-native = ""
 RDEPENDS_${PN}-ptest_class-nativesdk = ""
+RRECOMMENDS_${PN}-ptest += "ptest-runner"
 
 PACKAGES =+ "${@bb.utils.contains('PTEST_ENABLED', '1', '${PN}-ptest', '', d)}"
 
@@ -45,6 +46,9 @@ do_install_ptest_base() {
     fi
 }
 
+do_configure_ptest_base[dirs] = "${B}"
+do_compile_ptest_base[dirs] = "${B}"
+do_install_ptest_base[dirs] = "${B}"
 do_install_ptest_base[cleandirs] = "${D}${PTEST_PATH}"
 
 addtask configure_ptest_base after do_configure before do_compile

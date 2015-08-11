@@ -1,4 +1,4 @@
-
+"use strict";
 /* All shared functionality to go in libtoaster object.
  * This object really just helps readability since we can then have
  * a traceable namespace.
@@ -10,22 +10,33 @@ var libtoaster = (function (){
    * xhrUrl: the url to get the JSON from expects JSON in the form:
    *  { "list": [ { "name": "test", "detail" : "a test thing"  }, .... ] }
    * xhrParams: the data/parameters to pass to the getJSON url e.g.
-   *  { 'type' : 'projects' } the text typed will be passed as 'value'.
+   *  { 'type' : 'projects' } the text typed will be passed as 'search'.
    *  selectedCB: function to call once an item has been selected one
    *  arg of the item.
    */
   function _makeTypeahead (jQElement, xhrUrl, xhrParams, selectedCB) {
+    if (!xhrUrl || xhrUrl.length === 0)
+      throw("No url to typeahead supplied");
+
+    var xhrReq;
 
     jQElement.typeahead({
         source: function(query, process){
-          xhrParams.value = query;
-          $.getJSON(xhrUrl, this.options.xhrParams, function(data){
-            if (data.error != "ok") {
+          xhrParams.search = query;
+
+          /* If we have a request in progress don't fire off another one*/
+          if (xhrReq)
+            xhrReq.abort();
+
+          xhrReq = $.getJSON(xhrUrl, this.options.xhrParams, function(data){
+            if (data.error !== "ok") {
               console.log("Error getting data from server "+data.error);
               return;
             }
 
-            return process (data.list);
+            xhrReq = null;
+
+            return process(data.results);
           });
         },
         updater: function(item) {
@@ -33,16 +44,31 @@ var libtoaster = (function (){
           selectedCB(itemObj);
           return item;
         },
-        matcher: function(item) {  return ~item.name.toLowerCase().indexOf(this.query.toLowerCase()); },
+        matcher: function(item) {
+          if (!item.hasOwnProperty('name')) {
+            console.log("Name property missing in data");
+            return 0;
+          }
+
+          if (this.$element.val().length === 0)
+            return 0;
+
+          return 1;
+        },
         highlighter: function (item) {
-          if (item.hasOwnProperty('detail'))
-            /* Use jquery to escape the value as text into a span */
-            return $('<span></span>').text(item.name+' '+item.detail).get(0);
-          return $('<span></span>').text(item.name).get(0);
+          /* Use jquery to escape the item name and detail */
+          var current = $("<span></span>").text(item.name + ' '+item.detail);
+          current = current.html();
+
+          var query = this.query.replace(/[\-\[\]{}()*+?.,\\\^$|#\s]/g, '\\$&')
+          return current.replace(new RegExp('(' + query + ')', 'ig'), function ($1, match) {
+            return '<strong>' + match + '</strong>'
+          })
         },
         sorter: function (items) { return items; },
         xhrUrl: xhrUrl,
         xhrParams: xhrParams,
+        xhrReq: xhrReq,
     });
 
 
@@ -62,17 +88,16 @@ var libtoaster = (function (){
     }
 
     jQElement.data('typeahead').render = customRenderFunc;
-  };
+  }
 
   /*
    * url - the url of the xhr build */
   function _startABuild (url, project_id, targets, onsuccess, onfail) {
-    var data;
 
-    if (project_id)
-      data = 'project_id='+project_id+'&targets='+targets;
-    else
-      data = 'targets='+targets;
+    var data = {
+      project_id : project_id,
+      targets : targets,
+    }
 
     $.ajax( {
         type: "POST",
@@ -80,39 +105,67 @@ var libtoaster = (function (){
         data: data,
         headers: { 'X-CSRFToken' : $.cookie('csrftoken')},
         success: function (_data) {
-          if (_data.error != "ok") {
+          /* No proper reponse YOCTO #7995
+          if (_data.error !== "ok") {
             console.warn(_data.error);
-          } else {
-            if (onsuccess != undefined) onsuccess(_data);
-          }
+          } else { */
+            if (onsuccess !== undefined) onsuccess(_data);
+        //  }
         },
         error: function (_data) {
           console.warn("Call failed");
           console.warn(_data);
           if (onfail) onfail(data);
     } });
-  };
+  }
 
-  /* Get a project's configuration info */
-  function _getProjectInfo(url, projectId, onsuccess, onfail){
-    $.ajax({
+  /* cancelABuild:
+   * url: projectbuilds
+   * builds_ids: space separated list of build request ids
+   * onsuccess: callback for successful execution
+   * onfail: callback for failed execution
+   */
+  function _cancelABuild(url, build_ids, onsuccess, onfail){
+    $.ajax( {
         type: "POST",
         url: url,
-        data: { project_id : projectId },
+        data: { 'buildCancel': build_ids },
         headers: { 'X-CSRFToken' : $.cookie('csrftoken')},
         success: function (_data) {
-          if (_data.error != "ok") {
+          if (_data.error !== "ok") {
             console.warn(_data.error);
           } else {
-            if (onsuccess != undefined) onsuccess(_data);
+            if (onsuccess !== undefined) onsuccess(_data);
+          }
+        },
+        error: function (_data) {
+          console.warn("Call failed");
+          console.warn(_data);
+          if (onfail) onfail(_data);
+        }
+    });
+  }
+
+  /* Get a project's configuration info */
+  function _getProjectInfo(url, onsuccess, onfail){
+    $.ajax({
+        type: "GET",
+        data : { format: "json" },
+        url: url,
+        headers: { 'X-CSRFToken' : $.cookie('csrftoken')},
+        success: function (_data) {
+          if (_data.error !== "ok") {
+            console.warn(_data.error);
+          } else {
+            if (onsuccess !== undefined) onsuccess(_data);
           }
         },
         error: function (_data) {
           console.warn(_data);
-          if (onfail) onfail(data);
+          if (onfail) onfail(_data);
         }
     });
-  };
+  }
 
   /* Properties for data can be:
    * layerDel (csv)
@@ -121,19 +174,19 @@ var libtoaster = (function (){
    * projectVersion
    * machineName
    */
-  function _editProject(url, projectId, data, onSuccess, onFail){
+  function _editCurrentProject(data, onSuccess, onFail){
     $.ajax({
         type: "POST",
-        url: url,
+        url: libtoaster.ctx.projectPageUrl + "?format=json",
         data: data,
         headers: { 'X-CSRFToken' : $.cookie('csrftoken')},
         success: function (data) {
           if (data.error != "ok") {
             console.log(data.error);
-            if (onFail != undefined)
+            if (onFail !== undefined)
               onFail(data);
           } else {
-            if (onSuccess != undefined)
+            if (onSuccess !== undefined)
               onSuccess(data);
           }
         },
@@ -142,50 +195,175 @@ var libtoaster = (function (){
           console.log(data);
         }
     });
-  };
+  }
 
-  function _getLayerDepsForProject(xhrDataTypeaheadUrl, projectId, layerId, onSuccess, onFail){
+  function _getLayerDepsForProject(url, onSuccess, onFail){
     /* Check for dependencies not in the current project */
-    $.getJSON(xhrDataTypeaheadUrl,
-      { type: 'layerdeps', 'value': layerId , project_id: projectId },
+    $.getJSON(url,
+      { format: 'json' },
       function(data) {
         if (data.error != "ok") {
           console.log(data.error);
-          if (onFail != undefined)
+          if (onFail !== undefined)
             onFail(data);
         } else {
-          onSuccess(data);
+          var deps = {};
+          /* Filter out layer dep ids which are in the
+           * project already.
+           */
+          deps.list = data.layerdeps.list.filter(function(layerObj){
+            return (data.projectlayers.lastIndexOf(layerObj.id) < 0);
+          });
+
+          onSuccess(deps);
         }
       }, function() {
         console.log("E: Failed to make request");
     });
-  };
+  }
+
+  /* parses the query string of the current window.location to an object */
+  function _parseUrlParams() {
+    var string = window.location.search;
+    string = string.substr(1);
+    var stringArray = string.split ("&");
+    var obj = {};
+
+    for (var i in stringArray) {
+      var keyVal = stringArray[i].split ("=");
+      obj[keyVal[0]] = keyVal[1];
+    }
+
+    return obj;
+  }
+
+  /* takes a flat object and outputs it as a query string
+   * e.g. the output of dumpsUrlParams
+   */
+  function _dumpsUrlParams(obj) {
+    var str = "?";
+
+    for (var key in obj){
+      if (!obj[key])
+        continue;
+
+      str += key+ "="+obj[key].toString();
+      str += "&";
+    }
+
+    /* Maintain the current hash */
+    str += window.location.hash;
+
+    return str;
+  }
+
+  function _addRmLayer(layerObj, add, doneCb){
+    if (add === true) {
+      /* If adding get the deps for this layer */
+      libtoaster.getLayerDepsForProject(layerObj.layerdetailurl,
+        function (layers) {
+
+        /* got result for dependencies */
+        if (layers.list.length === 0){
+          var editData = { layerAdd : layerObj.id };
+          libtoaster.editCurrentProject(editData, function() {
+            doneCb([]);
+          });
+          return;
+        } else {
+          try {
+            showLayerDepsModal(layerObj, layers.list, null, null,  true, doneCb);
+          }  catch (e) {
+            $.getScript(libtoaster.ctx.jsUrl + "layerDepsModal.js", function(){
+              showLayerDepsModal(layerObj, layers.list, null, null,  true, doneCb);
+            }, function(){
+              console.warn("Failed to load layerDepsModal");
+            });
+          }
+        }
+      }, null);
+    } else if (add === false) {
+      var editData = { layerDel : layerObj.id };
+
+      libtoaster.editCurrentProject(editData, function () {
+        doneCb([]);
+      }, function () {
+        console.warn ("Removing layer from project failed");
+        doneCb(null);
+      });
+    }
+  }
+
+  function _makeLayerAddRmAlertMsg(layer, layerDepsList, add) {
+    var alertMsg;
+
+    if (layerDepsList.length > 0 && add === true) {
+      alertMsg = $("<span>You have added <strong>"+(layerDepsList.length+1)+"</strong> layers to your project: <a id=\"layer-affected-name\"></a> and its dependencies </span>");
+
+      /* Build the layer deps list */
+      layerDepsList.map(function(layer, i){
+        var link = $("<a></a>");
+
+        link.attr("href", layer.layerdetailurl);
+        link.text(layer.name);
+        link.tooltip({title: layer.tooltip});
+
+        if (i !== 0)
+          alertMsg.append(", ");
+
+        alertMsg.append(link);
+      });
+    } else if (layerDepsList.length === 0 && add === true) {
+      alertMsg = $("<span>You have added <strong>1</strong> layer to your project: <a id=\"layer-affected-name\"></a></span></span>");
+    } else if (add === false) {
+      alertMsg = $("<span>You have deleted <strong>1</strong> layer from your project: <a id=\"layer-affected-name\"></a></span>");
+    }
+
+    alertMsg.children("#layer-affected-name").text(layer.name);
+    alertMsg.children("#layer-affected-name").attr("href", layer.layerdetailurl);
+
+    return alertMsg.html();
+  }
+
+  function _showChangeNotification(message){
+    var alertMsg = $("#change-notification-msg");
+
+    alertMsg.html(message);
+    $("#change-notification, #change-notification *").fadeIn();
+  }
+
 
   return {
     reload_params : reload_params,
     startABuild : _startABuild,
+    cancelABuild : _cancelABuild,
     makeTypeahead : _makeTypeahead,
     getProjectInfo: _getProjectInfo,
     getLayerDepsForProject : _getLayerDepsForProject,
-    editProject : _editProject,
+    editCurrentProject : _editCurrentProject,
     debug: false,
-  }
+    parseUrlParams : _parseUrlParams,
+    dumpsUrlParams : _dumpsUrlParams,
+    addRmLayer : _addRmLayer,
+    makeLayerAddRmAlertMsg : _makeLayerAddRmAlertMsg,
+    showChangeNotification : _showChangeNotification,
+  };
 })();
 
 /* keep this in the global scope for compatability */
 function reload_params(params) {
-    uri = window.location.href;
-    splitlist = uri.split("?");
-    url = splitlist[0], parameters=splitlist[1];
+    var uri = window.location.href;
+    var splitlist = uri.split("?");
+    var url = splitlist[0];
+    var parameters = splitlist[1];
     // deserialize the call parameters
-    if(parameters){
-        cparams = parameters.split("&");
-    }else{
-        cparams = []
-    }
-    nparams = {}
-    for (i = 0; i < cparams.length; i++) {
-        temp = cparams[i].split("=");
+    var cparams = [];
+    if(parameters)
+      cparams = parameters.split("&");
+
+    var nparams = {};
+    for (var i = 0; i < cparams.length; i++) {
+        var temp = cparams[i].split("=");
         nparams[temp[0]] = temp[1];
     }
     // update parameter values
@@ -193,7 +371,7 @@ function reload_params(params) {
         nparams[encodeURIComponent(i)] = encodeURIComponent(params[i]);
     }
     // serialize the structure
-    callparams = []
+    var callparams = [];
     for (i in nparams) {
         callparams.push(i+"="+nparams[i]);
     }
@@ -204,7 +382,9 @@ function reload_params(params) {
 /* Things that happen for all pages */
 $(document).ready(function() {
 
-    /* If we don't have a console object which might be the case in some
+  var ajaxLoadingTimer;
+
+  /* If we don't have a console object which might be the case in some
      * browsers, no-op it to avoid undefined errors.
      */
     if (!window.console) {
@@ -226,6 +406,7 @@ $(document).ready(function() {
     });
 
 
+    /* START TODO Delete this section now redundant */
     /* Belen's additions */
 
     // turn Edit columns dropdown into a multiselect menu
@@ -237,7 +418,7 @@ $(document).ready(function() {
     // .btn class applied, and make sure popovers work on click, are mutually
     // exclusive and they close when your click outside their area
 
-    $('html').click(function(e){
+    $('html').click(function(){
         $('td > a.btn').popover('hide');
     });
 
@@ -274,18 +455,26 @@ $(document).ready(function() {
         $(this).find(".hover-help").css("visibility","hidden");
     });
 
+    /* END TODO Delete this section now redundant */
+
     // show task type and outcome in task details pages
     $(".task-info").tooltip({ container: 'body', html: true, delay: {show: 200}, placement: 'right' });
 
     // initialise the tooltips for the icon-pencil icons
     $(".icon-pencil").tooltip({ container: 'body', html: true, delay: {show: 400}, title: "Change" });
 
+    // initialise the tooltips for the download icons
+    $(".icon-download-alt").tooltip({ container: 'body', html: true, delay: { show: 200 } });
+
+    // initialise popover for debug information
+    $(".icon-info-sign").popover( { placement: 'bottom', html: true, container: 'body' });
+
     // linking directly to tabs
     $(function(){
           var hash = window.location.hash;
-          hash && $('ul.nav a[href="' + hash + '"]').tab('show');
+          $('ul.nav a[href="' + hash + '"]').tab('show');
 
-          $('.nav-tabs a').click(function (e) {
+          $('.nav-tabs a').click(function () {
             $(this).tab('show');
             $('body').scrollTop();
           });
@@ -326,10 +515,43 @@ $(document).ready(function() {
         $('#collapse-exceptions').toggleClass('in');
     });
 
+
+    $("#hide-alert").click(function(){
+      $(this).parent().fadeOut();
+    });
+
     //show warnings section when requested from the previous page
     if (location.href.search('#warnings') > -1) {
         $('#collapse-warnings').addClass('in');
     }
+
+    /* Show the loading notification if nothing has happend after 1.5
+     * seconds
+     */
+    $(document).bind("ajaxStart", function(){
+      if (ajaxLoadingTimer)
+        window.clearTimeout(ajaxLoadingTimer);
+
+      ajaxLoadingTimer = window.setTimeout(function() {
+        $("#loading-notification").fadeIn();
+      }, 1200);
+    });
+
+    $(document).bind("ajaxStop", function(){
+      if (ajaxLoadingTimer)
+        window.clearTimeout(ajaxLoadingTimer);
+
+      $("#loading-notification").fadeOut();
+    });
+
+    $(document).ajaxError(function(event, jqxhr, settings, errMsg){
+      if (errMsg === 'abort')
+        return;
+
+      console.warn("Problem with xhr call");
+      console.warn(errMsg);
+      console.warn(jqxhr.responseText);
+    });
 
     function check_for_duplicate_ids () {
       /* warn about duplicate element ids */

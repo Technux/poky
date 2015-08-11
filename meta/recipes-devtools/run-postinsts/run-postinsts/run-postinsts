@@ -20,14 +20,17 @@ for pm in $backend_list; do
 
 	case $pm in
 		"deb")
-			if [ -s "/var/lib/dpkg/status" ]; then
+			if [ -s "#LOCALSTATEDIR#/lib/dpkg/status" ]; then
 				pm_installed=true
 				break
 			fi
 			;;
 
 		"ipk")
-			pm_installed=true
+			if [ -s "/var/lib/opkg/status" ]; then
+				pm_installed=true
+				break
+			fi
 			;;
 	esac
 done

@@ -10,23 +10,29 @@ inherit autotools gettext texinfo
 
 EXTRA_OECONF += "DEFAULT_RMT_DIR=${base_sbindir}"
 
+# Let aclocal use the relative path for the m4 file rather than the
+# absolute since tar has a lot of m4 files, otherwise there might
+# be an "Argument list too long" error when it is built in a long/deep
+# directory.
+acpaths = "-I ./m4"
+
 EXTRAINSTALL = "do_install_extra"
 EXTRAINSTALL_class-nativesdk = ""
 
 do_install () {
     autotools_do_install
+    ln -s tar ${D}${bindir}/gtar
     ${EXTRAINSTALL}
 }
 
 do_install_extra () {
     install -d ${D}${base_bindir}
     mv ${D}${bindir}/tar ${D}${base_bindir}/tar
+    mv ${D}${bindir}/gtar ${D}${base_bindir}/gtar
     rmdir ${D}${bindir}/
 }
 
 PACKAGES =+ "${PN}-rmt"
-
-PACKAGECONFIG[acl] = "--with-posix-acls, --without-posix-acls, acl,"
 
 FILES_${PN}-rmt = "${base_sbindir}/rmt*"
 

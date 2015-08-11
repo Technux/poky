@@ -54,7 +54,7 @@ addtask multilib_install after do_install before do_package do_populate_sysroot
 # by creating this symlink to it
 #    /usr/lib64/x86_64-poky-linux/4.7/32
 
-python do_multilib_install() {
+fakeroot python do_multilib_install() {
     import re
 
     multilibs = d.getVar('MULTILIB_VARIANTS', True)
@@ -116,23 +116,23 @@ python do_multilib_install() {
         os.symlink(src, dest)
 }
 
-addtask extra_symlinks after do_multilib_install before do_package do_populate_sysroot
-python do_extra_symlinks() {
-    targetsysnoext = d.getVar('TARGET_SYS_NO_EXTENSION', True)
+def get_original_vendoros(d):
+    vendoros = d.expand('${TARGET_VENDOR}-${TARGET_OS}')
+    for suffix in [d.getVar('ABIEXTENSION', True), d.getVar('LIBCEXTENSION', True)]:
+        if suffix and vendoros.endswith(suffix):
+            vendoros = vendoros[:-len(suffix)]
+    return vendoros
 
-    if targetsysnoext != d.getVar('TARGET_SYS', True):
-        dest = d.getVar('D', True) + d.getVar('libdir', True) + '/' + targetsysnoext
+ORIG_TARGET_VENDOROS := "${@get_original_vendoros(d)}"
+BASETARGET_SYS = "${TARGET_ARCH}${ORIG_TARGET_VENDOROS}"
+
+addtask extra_symlinks after do_multilib_install before do_package do_populate_sysroot
+fakeroot python do_extra_symlinks() {
+    targetsys = d.getVar('BASETARGET_SYS', True)
+
+    if targetsys != d.getVar('TARGET_SYS', True):
+        dest = d.getVar('D', True) + d.getVar('libdir', True) + '/' + targetsys
         src = d.getVar('TARGET_SYS', True)
         if not os.path.lexists(dest) and os.path.lexists(d.getVar('D', True) + d.getVar('libdir', True)):
             os.symlink(src, dest)
-}
-
-python () {
-    targetsysnoext = d.getVar('TARGET_SYS', True)
-
-    for suffix in [d.getVar('ABIEXTENSION', True), d.getVar('LIBCEXTENSION', True)]:
-        if suffix and targetsysnoext.endswith(suffix):
-            targetsysnoext = targetsysnoext[:-len(suffix)]
-
-    d.setVar('TARGET_SYS_NO_EXTENSION', targetsysnoext)
 }

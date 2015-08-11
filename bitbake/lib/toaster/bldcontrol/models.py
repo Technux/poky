@@ -70,19 +70,19 @@ class BuildEnvironment(models.Model):
                 return "binary/octet-stream"
             except ImportError:
                 return "binary/octet-stream"
-        raise Exception("FIXME: artifact type not implemented for build environment type %s" % be.get_betype_display())
+        raise Exception("FIXME: artifact type not implemented for build environment type %s" % self.get_betype_display())
 
 
     def get_artifact(self, path):
         if self.betype == BuildEnvironment.TYPE_LOCAL:
             return open(path, "r")
-        raise Exception("FIXME: artifact download not implemented for build environment type %s" % be.get_betype_display())
+        raise Exception("FIXME: artifact download not implemented for build environment type %s" % self.get_betype_display())
 
     def has_artifact(self, path):
         import os
-        if self.betype == BuildRequest.TYPE_LOCAL:
+        if self.betype == BuildEnvironment.TYPE_LOCAL:
             return os.path.exists(path)
-        raise Exception("FIXME: has artifact not implemented for build environment type %s" % be.get_betype_display())
+        raise Exception("FIXME: has artifact not implemented for build environment type %s" % self.get_betype_display())
 
 # a BuildRequest is a request that the scheduler will build using a BuildEnvironment
 # the build request queue is the table itself, ordered by state
@@ -94,6 +94,7 @@ class BuildRequest(models.Model):
     REQ_COMPLETED = 3
     REQ_FAILED = 4
     REQ_DELETED = 5
+    REQ_ARCHIVE = 6
 
     REQUEST_STATE = (
         (REQ_CREATED, "created"),
@@ -102,7 +103,10 @@ class BuildRequest(models.Model):
         (REQ_COMPLETED, "completed"),
         (REQ_FAILED, "failed"),
         (REQ_DELETED, "deleted"),
+        (REQ_ARCHIVE, "archive"),
     )
+
+    search_allowed_fields = ("brtarget__target", "build__project__name")
 
     project     = models.ForeignKey(Project)
     build       = models.OneToOneField(Build, null = True)     # TODO: toasterui should set this when Build is created
@@ -111,6 +115,18 @@ class BuildRequest(models.Model):
     created     = models.DateTimeField(auto_now_add = True)
     updated     = models.DateTimeField(auto_now = True)
 
+    def get_duration(self):
+        return (self.updated - self.created).total_seconds()
+
+    def get_sorted_target_list(self):
+        tgts = self.brtarget_set.order_by( 'target' );
+        return( tgts );
+
+    def get_machine(self):
+        return self.brvariable_set.get(name="MACHINE").value
+
+    def __str__(self):
+        return "%s %s" % (self.project, self.get_state_display())
 
 # These tables specify the settings for running an actual build.
 # They MUST be kept in sync with the tables in orm.models.Project*
@@ -143,3 +159,6 @@ class BRError(models.Model):
     errtype     = models.CharField(max_length=100)
     errmsg      = models.TextField()
     traceback   = models.TextField()
+
+    def __str__(self):
+        return "%s (%s)" % (self.errmsg, self.req)

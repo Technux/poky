@@ -111,11 +111,15 @@ class RpmIndexer(Indexer):
         index_cmds = []
         rpm_dirs_found = False
         for arch in archs:
+            dbpath = os.path.join(self.d.getVar('WORKDIR', True), 'rpmdb', arch)
+            if os.path.exists(dbpath):
+                bb.utils.remove(dbpath, True)
             arch_dir = os.path.join(self.deploy_dir, arch)
             if not os.path.isdir(arch_dir):
                 continue
 
-            index_cmds.append("%s --update -q %s" % (rpm_createrepo, arch_dir))
+            index_cmds.append("%s --dbpath %s --update -q %s" % \
+                             (rpm_createrepo, dbpath, arch_dir))
 
             rpm_dirs_found = True
 
@@ -169,7 +173,35 @@ class OpkgIndexer(Indexer):
 
 
 class DpkgIndexer(Indexer):
+    def _create_configs(self):
+        bb.utils.mkdirhier(self.apt_conf_dir)
+        bb.utils.mkdirhier(os.path.join(self.apt_conf_dir, "lists", "partial"))
+        bb.utils.mkdirhier(os.path.join(self.apt_conf_dir, "apt.conf.d"))
+        bb.utils.mkdirhier(os.path.join(self.apt_conf_dir, "preferences.d"))
+
+        with open(os.path.join(self.apt_conf_dir, "preferences"),
+                "w") as prefs_file:
+            pass
+        with open(os.path.join(self.apt_conf_dir, "sources.list"),
+                "w+") as sources_file:
+            pass
+
+        with open(self.apt_conf_file, "w") as apt_conf:
+            with open(os.path.join(self.d.expand("${STAGING_ETCDIR_NATIVE}"),
+                "apt", "apt.conf.sample")) as apt_conf_sample:
+                for line in apt_conf_sample.read().split("\n"):
+                    line = re.sub("#ROOTFS#", "/dev/null", line)
+                    line = re.sub("#APTCONF#", self.apt_conf_dir, line)
+                    apt_conf.write(line + "\n")
+
     def write_index(self):
+        self.apt_conf_dir = os.path.join(self.d.expand("${APTCONF_TARGET}"),
+                "apt-ftparchive")
+        self.apt_conf_file = os.path.join(self.apt_conf_dir, "apt.conf")
+        self._create_configs()
+
+        os.environ['APT_CONFIG'] = self.apt_conf_file
+
         pkg_archs = self.d.getVar('PACKAGE_ARCHS', True)
         if pkg_archs is not None:
             arch_list = pkg_archs.split()
@@ -414,6 +446,8 @@ class DpkgPkgsList(PkgsList):
         if format == "file":
             tmp_output = ""
             for line in tuple(output.split('\n')):
+                if not line.strip():
+                    continue
                 pkg, pkg_file, pkg_arch = line.split()
                 full_path = os.path.join(self.rootfs_dir, pkg_arch, pkg_file)
                 if os.path.exists(full_path):
@@ -529,8 +563,11 @@ class PackageManager(object):
             return
 
         cmd = [bb.utils.which(os.getenv('PATH'), "oe-pkgdata-util"),
-               "glob", self.d.getVar('PKGDATA_DIR', True), installed_pkgs_file,
+               "-p", self.d.getVar('PKGDATA_DIR', True), "glob", installed_pkgs_file,
                globs]
+        exclude = self.d.getVar('PACKAGE_EXCLUDE_COMPLEMENTARY', True)
+        if exclude:
+            cmd.extend(['-x', exclude])
         try:
             bb.note("Installing complementary packages ...")
             complementary_pkgs = subprocess.check_output(cmd, stderr=subprocess.STDOUT)
@@ -575,10 +612,11 @@ class RpmPM(PackageManager):
         self.fullpkglist = list()
         self.deploy_dir = self.d.getVar('DEPLOY_DIR_RPM', True)
         self.etcrpm_dir = os.path.join(self.target_rootfs, "etc/rpm")
-        self.install_dir = os.path.join(self.target_rootfs, "install")
+        self.install_dir_name = "oe_install"
+        self.install_dir_path = os.path.join(self.target_rootfs, self.install_dir_name)
         self.rpm_cmd = bb.utils.which(os.getenv('PATH'), "rpm")
         self.smart_cmd = bb.utils.which(os.getenv('PATH'), "smart")
-        self.smart_opt = "--quiet --data-dir=" + os.path.join(target_rootfs,
+        self.smart_opt = "--log-level=warning --data-dir=" + os.path.join(target_rootfs,
                                                       'var/lib/smart')
         self.scriptlet_wrapper = self.d.expand('${WORKDIR}/scriptlet_wrapper')
         self.solution_manifest = self.d.expand('${T}/saved/%s_solution' %
@@ -676,10 +714,10 @@ class RpmPM(PackageManager):
     def _search_pkg_name_in_feeds(self, pkg, feed_archs):
         for arch in feed_archs:
             arch = arch.replace('-', '_')
+            regex_match = re.compile(r"^%s-[^-]*-[^-]*@%s$" % \
+                (re.escape(pkg), re.escape(arch)))
             for p in self.fullpkglist:
-                regex_match = r"^%s-[^-]*-[^-]*@%s$" % \
-                    (re.escape(pkg), re.escape(arch))
-                if re.match(regex_match, p) is not None:
+                if regex_match.match(p) is not None:
                     # First found is best match
                     # bb.note('%s -> %s' % (pkg, pkg + '@' + arch))
                     return pkg + '@' + arch
@@ -746,9 +784,9 @@ class RpmPM(PackageManager):
         bb.utils.mkdirhier(self.etcrpm_dir)
 
         # Setup temporary directory -- install...
-        if os.path.exists(self.install_dir):
-            bb.utils.remove(self.install_dir, True)
-        bb.utils.mkdirhier(os.path.join(self.install_dir, 'tmp'))
+        if os.path.exists(self.install_dir_path):
+            bb.utils.remove(self.install_dir_path, True)
+        bb.utils.mkdirhier(os.path.join(self.install_dir_path, 'tmp'))
 
         channel_priority = 5
         platform_dir = os.path.join(self.etcrpm_dir, "platform")
@@ -835,7 +873,7 @@ class RpmPM(PackageManager):
         self._invoke_smart('config --set rpm-dbpath=/var/lib/rpm')
         self._invoke_smart('config --set rpm-extra-macros._var=%s' %
                            self.d.getVar('localstatedir', True))
-        cmd = 'config --set rpm-extra-macros._tmppath=/install/tmp'
+        cmd = "config --set rpm-extra-macros._tmppath=/%s/tmp" % (self.install_dir_name)
 
         prefer_color = self.d.getVar('RPM_PREFER_ELF_ARCH', True)
         if prefer_color:
@@ -901,8 +939,10 @@ class RpmPM(PackageManager):
         #
         if self.rpm_version == 4:
             scriptletcmd = "$2 $3 $4\n"
+            scriptpath = "$3"
         else:
             scriptletcmd = "$2 $1/$3 $4\n"
+            scriptpath = "$1/$3"
 
         SCRIPTLET_FORMAT = "#!/bin/bash\n" \
             "\n" \
@@ -920,10 +960,10 @@ class RpmPM(PackageManager):
             "    mkdir -p $1/etc/rpm-postinsts\n" \
             "    num=100\n" \
             "    while [ -e $1/etc/rpm-postinsts/${num}-* ]; do num=$((num + 1)); done\n" \
-            "    name=`head -1 $1/$3 | cut -d\' \' -f 2`\n" \
+            "    name=`head -1 " + scriptpath + " | cut -d\' \' -f 2`\n" \
             '    echo "#!$2" > $1/etc/rpm-postinsts/${num}-${name}\n' \
             '    echo "# Arg: $4" >> $1/etc/rpm-postinsts/${num}-${name}\n' \
-            "    cat $1/$3 >> $1/etc/rpm-postinsts/${num}-${name}\n" \
+            "    cat " + scriptpath + " >> $1/etc/rpm-postinsts/${num}-${name}\n" \
             "    chmod +x $1/etc/rpm-postinsts/${num}-${name}\n" \
             "  else\n" \
             '    echo "Error: pre/post remove scriptlet failed"\n' \
@@ -989,7 +1029,7 @@ class RpmPM(PackageManager):
             cmd += "--dbpath=/var/lib/rpm "
             cmd += "--define='_cross_scriptlet_wrapper %s' " % \
                    self.scriptlet_wrapper
-            cmd += "--define='_tmppath /install/tmp' %s" % ' '.join(pkgs)
+            cmd += "--define='_tmppath /%s/tmp' %s" % (self.install_dir_name, ' '.join(pkgs))
         else:
             # for pkg in pkgs:
             #   bb.note('Debug: What required: %s' % pkg)
@@ -1024,7 +1064,7 @@ class RpmPM(PackageManager):
         bb.utils.remove(os.path.join(self.target_rootfs, 'var/lib/opkg'), True)
 
         # remove temp directory
-        bb.utils.remove(self.d.expand('${IMAGE_ROOTFS}/install'), True)
+        bb.utils.remove(self.install_dir_path, True)
 
     def backup_packaging_data(self):
         # Save the rpmlib for increment rpm image generation
@@ -1127,7 +1167,7 @@ class RpmPM(PackageManager):
         return
 
     def save_rpmpostinst(self, pkg):
-        mlibs = (self.d.getVar('MULTILIB_GLOBAL_VARIANTS') or "").split()
+        mlibs = (self.d.getVar('MULTILIB_GLOBAL_VARIANTS', False) or "").split()
 
         new_pkg = pkg
         # Remove any multilib prefix from the package name
@@ -1628,10 +1668,10 @@ class DpkgPM(PackageManager):
     def remove(self, pkgs, with_dependencies=True):
         if with_dependencies:
             os.environ['APT_CONFIG'] = self.apt_conf_file
-            cmd = "%s remove %s" % (self.apt_get_cmd, ' '.join(pkgs))
+            cmd = "%s purge %s" % (self.apt_get_cmd, ' '.join(pkgs))
         else:
             cmd = "%s --admindir=%s/var/lib/dpkg --instdir=%s" \
-                  " -r --force-depends %s" % \
+                  " -P --force-depends %s" % \
                   (bb.utils.which(os.getenv('PATH'), "dpkg"),
                    self.target_rootfs, self.target_rootfs, ' '.join(pkgs))
 
@@ -1723,9 +1763,12 @@ class DpkgPM(PackageManager):
             with open(self.d.expand("${STAGING_ETCDIR_NATIVE}/apt/apt.conf.sample")) as apt_conf_sample:
                 for line in apt_conf_sample.read().split("\n"):
                     match_arch = re.match("  Architecture \".*\";$", line)
+                    architectures = ""
                     if match_arch:
                         for base_arch in base_arch_list:
-                            apt_conf.write("  Architecture \"%s\";\n" % base_arch)
+                            architectures += "\"%s\";" % base_arch
+                        apt_conf.write("  Architectures {%s};\n" % architectures);
+                        apt_conf.write("  Architecture \"%s\";\n" % base_archs)
                     else:
                         line = re.sub("#ROOTFS#", self.target_rootfs, line)
                         line = re.sub("#APTCONF#", self.apt_conf_dir, line)

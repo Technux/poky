@@ -86,22 +86,22 @@
                 <a href="{% url "recipe" build.pk task.recipe.pk %}">{{task.recipe.version}}</a>
             </td>
             <td class="task_name">
-                <a href="{%url "task" build.pk task.pk%} ">{{task.task_name}}</a> {% if task.get_description %}<i class="icon-question-sign get-help hover-help" title="{{task.get_description}}"></i> {% endif %}
+                <a href="{%url "task" build.pk task.pk%}">{{task.task_name}}</a> {% if task.get_description %}<i class="icon-question-sign get-help hover-help" title="{{task.get_description}}"></i> {% endif %}
             </td>
             <td class="executed">
-                <a href="{%url "task" build.pk task.pk%} ">{{task.get_executed_display}}</a>
+                <a href="{%url "task" build.pk task.pk%}">{{task.get_executed_display}}</a>
             </td>
             <td class="outcome">
-                <a href="{%url "task" build.pk task.pk%} ">{{task.get_outcome_display}} </a>
+                <a href="{%url "task" build.pk task.pk%}">{{task.get_outcome_display}} </a>
+                {% if task.outcome = task.OUTCOME_FAILED %}
+                    <a href="{% url 'build_artifact' build.pk "tasklogfile" task.pk %}">
+                        <i class="icon-download-alt" title="Download task log file"></i>
+                    </a>
+                {% endif %}
                 <i class="icon-question-sign get-help hover-help" title="{{task.get_outcome_help}}"></i>
-                    {% if MANAGED and build.project and task.outcome = task.OUTCOME_FAILED %}
-                        <a href="{% url 'build_artifact' build.pk "tasklogfile" task.pk %}">
-                            <i class="icon-download-alt" title="" data-original-title="Download task log file"></i>
-                        </a>
-                    {% endif %}
             </td>
             <td class="cache_attempt">
-                <a href="{%url "task" build.pk task.pk%} ">{{task.get_sstate_result_display|format_none_and_zero}}</a>
+                <a href="{%url "task" build.pk task.pk%}">{{task.get_sstate_result_display|format_none_and_zero}}</a>
             </td>
             <td class="time_taken">
                 {{task.elapsed_time|format_none_and_zero|floatformat:2}}
@@ -113,11 +113,6 @@
                 {{task.disk_io|format_none_and_zero}}
             </td>
 
-        {% if not MANAGED or not build.project %}
-            <td class="task_log">
-                {{task.logfile}}
-            </td>
-        {% endif %}
         </tr>
     {% endfor %}
 

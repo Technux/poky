@@ -16,7 +16,11 @@
 # The test names are the module names in meta/lib/oeqa/runtime.
 # Each name in TEST_SUITES represents a required test for the image. (no skipping allowed)
 # Appending "auto" means that it will try to run all tests that are suitable for the image (each test decides that on it's own).
-# Note that order in TEST_SUITES is important (it's the order tests run) and it influences tests dependencies.
+# Note that order in TEST_SUITES is relevant: tests are run in an order such that
+# tests mentioned in @skipUnlessPassed run before the tests that depend on them,
+# but without such dependencies, tests run in the order in which they are listed
+# in TEST_SUITES.
+#
 # A layer can add its own tests in lib/oeqa/runtime, provided it extends BBPATH as normal in its layer.conf.
 
 # TEST_LOG_DIR contains a command ssh log and may contain infromation about what command is running, output and return codes and for qemu a boot log till login.
@@ -30,9 +34,15 @@ TEST_EXPORT_ONLY ?= "0"
 
 DEFAULT_TEST_SUITES = "ping auto"
 DEFAULT_TEST_SUITES_pn-core-image-minimal = "ping"
-DEFAULT_TEST_SUITES_pn-core-image-sato = "ping ssh df connman syslog xorg scp vnc date rpm smart dmesg python parselogs"
-DEFAULT_TEST_SUITES_pn-core-image-sato-sdk = "ping ssh df connman syslog xorg scp vnc date perl ldd gcc rpm smart kernelmodule dmesg python parselogs"
+DEFAULT_TEST_SUITES_pn-core-image-sato = "ping ssh df connman syslog xorg scp vnc date dmesg parselogs \
+    ${@bb.utils.contains('IMAGE_PKGTYPE', 'rpm', 'python smart rpm', '', d)}"
+DEFAULT_TEST_SUITES_pn-core-image-sato-sdk = "ping ssh df connman syslog xorg scp vnc date perl ldd gcc kernelmodule dmesg python parselogs \
+    ${@bb.utils.contains('IMAGE_PKGTYPE', 'rpm', 'smart rpm', '', d)}"
 DEFAULT_TEST_SUITES_pn-meta-toolchain = "auto"
+
+# aarch64 has no graphics
+DEFAULT_TEST_SUITES_remove_aarch64 = "xorg vnc"
+
 TEST_SUITES ?= "${DEFAULT_TEST_SUITES}"
 
 TEST_QEMUBOOT_TIMEOUT ?= "1000"
@@ -62,15 +72,42 @@ do_testsdk[nostamp] = "1"
 do_testsdk[depends] += "${TESTIMAGEDEPENDS}"
 do_testsdk[lockfiles] += "${TESTIMAGELOCK}"
 
+# get testcase list from specified file
+# if path is a relative path, then relative to build/conf/
+def read_testlist(d, fpath):
+    if not os.path.isabs(fpath):
+        builddir = d.getVar("TOPDIR", True)
+        fpath = os.path.join(builddir, "conf", fpath)
+    if not os.path.exists(fpath):
+        bb.fatal("No such manifest file: ", fpath)
+    tcs = []
+    for line in open(fpath).readlines():
+        line = line.strip()
+        if line and not line.startswith("#"):
+            tcs.append(line)
+    return " ".join(tcs)
+
 def get_tests_list(d, type="runtime"):
-    testsuites = d.getVar("TEST_SUITES", True).split()
+    testsuites = []
+    testslist = []
+    manifests = d.getVar("TEST_SUITES_MANIFEST", True)
+    if manifests is not None:
+        manifests = manifests.split()
+        for manifest in manifests:
+            testsuites.extend(read_testlist(d, manifest).split())
+    else:
+        testsuites = d.getVar("TEST_SUITES", True).split()
+    if type == "sdk":
+        testsuites = (d.getVar("TEST_SUITES_SDK", True) or "auto").split()
     bbpath = d.getVar("BBPATH", True).split(':')
 
     # This relies on lib/ under each directory in BBPATH being added to sys.path
     # (as done by default in base.bbclass)
-    testslist = []
     for testname in testsuites:
         if testname != "auto":
+            if testname.startswith("oeqa."):
+                testslist.append(testname)
+                continue
             found = False
             for p in bbpath:
                 if os.path.exists(os.path.join(p, 'lib', 'oeqa', type, testname + '.py')):
@@ -257,21 +294,11 @@ def testsdk_main(d):
     # they won't be skipped even if they aren't suitable.
     # testslist is what we'll actually pass to the unittest loader
     testslist = get_tests_list(d, "sdk")
-    testsrequired = [t for t in d.getVar("TEST_SUITES", True).split() if t != "auto"]
-
-    sdktestdir = d.expand("${WORKDIR}/testimage-sdk/")
-    bb.utils.remove(sdktestdir, True)
-    bb.utils.mkdirhier(sdktestdir)
+    testsrequired = [t for t in (d.getVar("TEST_SUITES_SDK", True) or "auto").split() if t != "auto"]
 
     tcname = d.expand("${SDK_DEPLOY}/${TOOLCHAIN_OUTPUTNAME}.sh")
     if not os.path.exists(tcname):
-        bb.fatal("The toolchain is not built. Build it before running the tests: 'bitbake meta-toolchain' .")
-    subprocess.call("cd %s; %s <<EOF\n./tc\nY\nEOF" % (sdktestdir, tcname), shell=True)
-
-    targets = glob.glob(d.expand(sdktestdir + "/tc/sysroots/*${TARGET_VENDOR}-linux*"))
-    if len(targets) > 1:
-        bb.fatal("Error, multiple targets within the SDK found and we don't know which to test? %s" % str(targets))
-    sdkenv = sdktestdir + "/tc/environment-setup-" + os.path.basename(targets[0])
+        bb.fatal("The toolchain is not built. Build it before running the tests: 'bitbake <image> -c populate_sdk' .")
 
     class TestContext(object):
         def __init__(self):
@@ -283,40 +310,55 @@ def testsdk_main(d):
             self.sdkenv = sdkenv
             self.imagefeatures = d.getVar("IMAGE_FEATURES", True).split()
             self.distrofeatures = d.getVar("DISTRO_FEATURES", True).split()
-            manifest = os.path.join(d.getVar("SDK_MANIFEST", True))
+            manifest = d.getVar("SDK_TARGET_MANIFEST", True)
             try:
                 with open(manifest) as f:
                     self.pkgmanifest = f.read()
             except IOError as e:
                 bb.fatal("No package manifest file found. Did you build the sdk image?\n%s" % e)
+            hostmanifest = d.getVar("SDK_HOST_MANIFEST", True)
+            try:
+                with open(hostmanifest) as f:
+                    self.hostpkgmanifest = f.read()
+            except IOError as e:
+                bb.fatal("No host package manifest file found. Did you build the sdk image?\n%s" % e)
 
-    # test context
-    tc = TestContext()
+    sdktestdir = d.expand("${WORKDIR}/testimage-sdk/")
+    bb.utils.remove(sdktestdir, True)
+    bb.utils.mkdirhier(sdktestdir)
+    subprocess.call("cd %s; %s <<EOF\n./tc\nY\nEOF" % (sdktestdir, tcname), shell=True)
 
-    # this is a dummy load of tests
-    # we are doing that to find compile errors in the tests themselves
-    # before booting the image
     try:
-        loadTests(tc, "sdk")
-    except Exception as e:
-        import traceback
-        bb.fatal("Loading tests failed:\n%s" % traceback.format_exc())
+        targets = glob.glob(d.expand(sdktestdir + "/tc/environment-setup-*"))
+        bb.warn(str(targets))
+        for sdkenv in targets:
+            bb.plain("Testing %s" % sdkenv)
+            # test context
+            tc = TestContext()
 
-    try:
-        starttime = time.time()
-        result = runTests(tc, "sdk")
-        stoptime = time.time()
-        if result.wasSuccessful():
-            bb.plain("%s - Ran %d test%s in %.3fs" % (pn, result.testsRun, result.testsRun != 1 and "s" or "", stoptime - starttime))
-            msg = "%s - OK - All required tests passed" % pn
-            skipped = len(result.skipped)
-            if skipped:
-                msg += " (skipped=%d)" % skipped
-            bb.plain(msg)
-        else:
-            raise bb.build.FuncFailed("%s - FAILED - check the task log and the commands log" % pn )
+            # this is a dummy load of tests
+            # we are doing that to find compile errors in the tests themselves
+            # before booting the image
+            try:
+                loadTests(tc, "sdk")
+            except Exception as e:
+                import traceback
+                bb.fatal("Loading tests failed:\n%s" % traceback.format_exc())
+
+    
+            starttime = time.time()
+            result = runTests(tc, "sdk")
+            stoptime = time.time()
+            if result.wasSuccessful():
+                bb.plain("%s SDK(%s):%s - Ran %d test%s in %.3fs" % (pn, os.path.basename(tcname), os.path.basename(sdkenv),result.testsRun, result.testsRun != 1 and "s" or "", stoptime - starttime))
+                msg = "%s - OK - All required tests passed" % pn
+                skipped = len(result.skipped)
+                if skipped:
+                    msg += " (skipped=%d)" % skipped
+                bb.plain(msg)
+            else:
+                raise bb.build.FuncFailed("%s - FAILED - check the task log and the commands log" % pn )
     finally:
-        pass
         bb.utils.remove(sdktestdir, True)
 
 testsdk_main[vardepsexclude] =+ "BB_ORIGENV"

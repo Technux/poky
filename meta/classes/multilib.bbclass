@@ -18,6 +18,11 @@ python multilib_virtclass_handler () {
         if val:
             e.data.setVar(name + "_MULTILIB_ORIGINAL", val)
 
+    overrides = e.data.getVar("OVERRIDES", False)
+    pn = e.data.getVar("PN", False)
+    overrides = overrides.replace("pn-${PN}", "pn-${PN}:pn-" + pn)
+    e.data.setVar("OVERRIDES", overrides)
+
     if bb.data.inherits_class('image', e.data):
         e.data.setVar("MLPREFIX", variant + "-")
         e.data.setVar("PN", variant + "-" + e.data.getVar("PN", False))
@@ -127,8 +132,9 @@ python do_package_qa_multilib() {
                 (not i.startswith("rtld")) and (not i.startswith('kernel-vmlinux')):
                 candidates.append(i)
         if len(candidates) > 0:
-            bb.warn("Multilib QA Issue: %s package %s - suspicious values '%s' in %s" 
-                   % (d.getVar('PN', True), pkg, ' '.join(candidates), var))
+            msg = "%s package %s - suspicious values '%s' in %s" \
+                   % (d.getVar('PN', True), pkg, ' '.join(candidates), var)
+            package_qa_handle_error("multilib", msg, d)
 
     ml = d.getVar('MLPREFIX', True)
     if not ml:

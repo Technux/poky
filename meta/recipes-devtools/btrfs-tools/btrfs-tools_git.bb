@@ -12,16 +12,21 @@ LIC_FILES_CHKSUM = "file://COPYING;md5=fcb02dc552a041dee27e4b85c7396067"
 SECTION = "base"
 DEPENDS = "util-linux attr e2fsprogs lzo acl"
 
-SRCREV = "44cdb62d3478c834f41c87ea79d261b9c8982dce"
-SRC_URI = "git://git.kernel.org/pub/scm/linux/kernel/git/kdave/btrfs-progs.git"
+SRCREV = "20be329fdb569fefdf88ba0e4ca1a41488fcbc19"
+SRC_URI = "git://git.kernel.org/pub/scm/linux/kernel/git/kdave/btrfs-progs.git \
+           file://fix-parallel.patch \
+"
+
+inherit autotools-brokensep pkgconfig
+
+EXTRA_OECONF += "--disable-documentation"
+
+do_configure_prepend() {
+      sh autogen.sh
+}
+
 S = "${WORKDIR}/git"
 
-PV = "3.14.2+git${SRCPV}"
-
-EXTRA_OEMAKE += "DISABLE_DOCUMENTATION=1"
-
-do_install () {
-	oe_runmake 'DESTDIR=${D}' install
-}
+PV = "4.1.1+git${SRCPV}"
 
 BBCLASSEXTEND = "native"
