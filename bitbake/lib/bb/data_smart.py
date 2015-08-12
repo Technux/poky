@@ -54,27 +54,36 @@ def infer_caller_details(loginfo, parent = False, varval = True):
         return
     # Infer caller's likely values for variable (var) and value (value), 
     # to reduce clutter in the rest of the code.
-    if varval and ('variable' not in loginfo or 'detail' not in loginfo):
+    above = None
+    def set_above():
         try:
             raise Exception
         except Exception:
             tb = sys.exc_info()[2]
             if parent:
-                above = tb.tb_frame.f_back.f_back
+                return tb.tb_frame.f_back.f_back.f_back
             else:
-                above = tb.tb_frame.f_back
-            lcls = above.f_locals.items()
+                return tb.tb_frame.f_back.f_back
+
+    if varval and ('variable' not in loginfo or 'detail' not in loginfo):
+        if not above:
+            above = set_above()
+        lcls = above.f_locals.items()
         for k, v in lcls:
             if k == 'value' and 'detail' not in loginfo:
                 loginfo['detail'] = v
             if k == 'var' and 'variable' not in loginfo:
                 loginfo['variable'] = v
     # Infer file/line/function from traceback
+    # Don't use traceback.extract_stack() since it fills the line contents which
+    # we don't need and that hits stat syscalls
     if 'file' not in loginfo:
-        depth = 3    
-        if parent:
-            depth = 4
-        file, line, func, text = traceback.extract_stack(limit = depth)[0]
+        if not above:
+            above = set_above()
+        f = above.f_back
+        line = f.f_lineno
+        file = f.f_code.co_filename
+        func = f.f_code.co_name
         loginfo['file'] = file
         loginfo['line'] = line
         if func not in loginfo:
@@ -243,8 +252,20 @@ class VariableHistory(object):
         else:
             return []
 
-    def emit(self, var, oval, val, o):
+    def emit(self, var, oval, val, o, d):
         history = self.variable(var)
+
+        # Append override history
+        if var in d.overridedata:
+            for (r, override) in d.overridedata[var]:
+                for event in self.variable(r):
+                    loginfo = event.copy()
+                    if 'flag' in loginfo and not loginfo['flag'].startswith("_"):
+                        continue
+                    loginfo['variable'] = var
+                    loginfo['op'] = 'override[%s]:%s' % (override, loginfo['op'])
+                    history.append(loginfo)
+
         commentVal = re.sub('\n', '\n#', str(oval))
         if history:
             if len(history) == 1:
@@ -310,6 +331,9 @@ class DataSmart(MutableMapping):
         self.expand_cache = {}
 
         # cookie monster tribute
+        # Need to be careful about writes to overridedata as
+        # its only a shallow copy, could influence other data store
+        # copies!
         self.overridedata = {}
         self.overrides = None
         self.overridevars = set(["OVERRIDES", "FILE"])
@@ -481,16 +505,9 @@ class DataSmart(MutableMapping):
             if shortvar not in self.overridedata:
                 self.overridedata[shortvar] = []
             if [var, override] not in self.overridedata[shortvar]:
+                # Force CoW by recreating the list first
+                self.overridedata[shortvar] = list(self.overridedata[shortvar])
                 self.overridedata[shortvar].append([var, override])
-            for event in self.varhistory.variable(var):
-                if 'flag' in loginfo and not loginfo['flag'].startswith("_"):
-                    continue
-                loginfo = event.copy()
-                loginfo['variable'] = shortvar
-                loginfo['op'] = 'override[%s]:%s' % (override, loginfo['op'])
-                loginfo['nodups'] = True
-                self.varhistory.record(**loginfo)
-
             override = None
             if "_" in shortvar:
                 override = var[shortvar.rfind('_')+1:]
@@ -561,6 +578,8 @@ class DataSmart(MutableMapping):
             while override:
                 try:
                     if shortvar in self.overridedata:
+                        # Force CoW by recreating the list first
+                        self.overridedata[shortvar] = list(self.overridedata[shortvar])
                         self.overridedata[shortvar].remove([var, override])
                 except ValueError as e:
                     pass
@@ -637,6 +656,9 @@ class DataSmart(MutableMapping):
                 match = True
                 if o:
                     for o2 in o.split("_"):
+                        m = __expand_var_regexp__.match(o2)
+                        if m:
+                            o2 = self.getVar(o2[2:-1], True)
                         if not o2 in self.overrides:
                             match = False                            
                 if match:
@@ -651,6 +673,9 @@ class DataSmart(MutableMapping):
                 match = True
                 if o:
                     for o2 in o.split("_"):
+                        m = __expand_var_regexp__.match(o2)
+                        if m:
+                            o2 = self.getVar(o2[2:-1], True)
                         if not o2 in self.overrides:
                             match = False                            
                 if match:
@@ -672,6 +697,9 @@ class DataSmart(MutableMapping):
                 match = True
                 if o:
                     for o2 in o.split("_"):
+                        m = __expand_var_regexp__.match(o2)
+                        if m:
+                            o2 = self.getVar(o2[2:-1], True)
                         if not o2 in self.overrides:
                             match = False                            
                 if match:
@@ -780,6 +808,8 @@ class DataSmart(MutableMapping):
 
         data.overrides = None
         data.overridevars = copy.copy(self.overridevars)
+        # Should really be a deepcopy but has heavy overhead.
+        # Instead, we're careful with writes.
         data.overridedata = copy.copy(self.overridedata)
 
         return data

@@ -1,77 +1,150 @@
+#! /usr/bin/env python
+# ex:ts=4:sw=4:sts=4:et
+# -*- tab-width: 4; c-basic-offset: 4; indent-tabs-mode: nil -*-
+#
+# BitBake Toaster Implementation
+#
+# Copyright (C) 2013-2015 Intel Corporation
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License version 2 as
+# published by the Free Software Foundation.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License along
+# with this program; if not, write to the Free Software Foundation, Inc.,
+# 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+
+"""Test cases for Toaster GUI and ReST."""
+
 from django.test import TestCase
 from django.core.urlresolvers import reverse
-from orm.models import Project, Release, BitbakeVersion, Build
-from orm.models import ReleaseLayerSourcePriority, LayerSource, Layer, Layer_Version
+from orm.models import Project, Release, BitbakeVersion
+from orm.models import ReleaseLayerSourcePriority, LayerSource, Layer
+from orm.models import Layer_Version, Recipe, Machine, ProjectLayer
+import json
 
-class ProvisionedProjectTestCase(TestCase):
-    TEST_PROJECT_NAME = "test project"
+PROJECT_NAME = "test project"
+
+class ViewTests(TestCase):
+    """Tests to verify view APIs."""
 
     def setUp(self):
-        self.bbv, created = BitbakeVersion.objects.get_or_create(name="test bbv", giturl="/tmp/", branch="master", dirpath="")
-        self.release, created = Release.objects.get_or_create(name="test release", bitbake_version = self.bbv)
-        self.project = Project.objects.create_project(name=AllProjectsViewTestCase.TEST_PROJECT_NAME, release=self.release)
+        bbv = BitbakeVersion.objects.create(name="test bbv", giturl="/tmp/",
+                                            branch="master", dirpath="")
+        release = Release.objects.create(name="test release",
+                                         bitbake_version=bbv)
+        self.project = Project.objects.create_project(name=PROJECT_NAME,
+                                                      release=release)
+        layersrc = LayerSource.objects.create(sourcetype=LayerSource.TYPE_IMPORTED)
+        self.priority = ReleaseLayerSourcePriority.objects.create(release=release,
+                                                                  layer_source=layersrc)
+        layer = Layer.objects.create(name="base-layer", layer_source=layersrc,
+                                     vcs_url="/tmp/")
 
+        lver = Layer_Version.objects.create(layer=layer, project=self.project,
+                                            layer_source=layersrc, commit="master")
 
-class AllProjectsViewTestCase(ProvisionedProjectTestCase):
+        Recipe.objects.create(layer_source=layersrc, name="base-recipe",
+                              version="1.2", summary="one recipe",
+                              description="recipe", layer_version=lver)
+
+        Machine.objects.create(layer_version=lver, name="wisk",
+                               description="wisking machine")
+
+        ProjectLayer.objects.create(project=self.project, layercommit=lver)
+
+        self.assertTrue(lver in self.project.compatible_layerversions())
 
     def test_get_base_call_returns_html(self):
+        """Basic test for all-projects view"""
         response = self.client.get(reverse('all-projects'), follow=True)
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response['Content-Type'].startswith('text/html'))
         self.assertTemplateUsed(response, "projects.html")
-        self.assertTrue(AllProjectsViewTestCase.TEST_PROJECT_NAME in response.content)
+        self.assertTrue(PROJECT_NAME in response.content)
 
     def test_get_json_call_returns_json(self):
-        response = self.client.get(reverse('all-projects'), {"format": "json"}, follow=True)
+        """Test for all projects output in json format"""
+        url = reverse('all-projects')
+        response = self.client.get(url, {"format": "json"}, follow=True)
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response['Content-Type'].startswith('application/json'))
 
-        try:
-            import json
-            data = json.loads(response.content)
-        except:
-            self.fail("Response %s is not json-loadable" % response.content)
+        data = json.loads(response.content)
 
         self.assertTrue("error" in data)
         self.assertEqual(data["error"], "ok")
-        self.assertTrue("list" in data)
+        self.assertTrue("rows" in data)
 
-        self.assertTrue(AllProjectsViewTestCase.TEST_PROJECT_NAME in map(lambda x: x["name"], data["list"]))
-        self.assertTrue("id" in data["list"][0])
-        self.assertTrue("projectLayersUrl" in data["list"][0])
-        self.assertTrue("projectPageUrl" in data["list"][0])
-        self.assertTrue("projectBuildsUrl" in data["list"][0])
+        self.assertTrue(PROJECT_NAME in [x["name"] for x in data["rows"]])
+        self.assertTrue("id" in data["rows"][0])
 
-class ProvisionedLayersProjectTestCase(ProvisionedProjectTestCase):
-    LAYER_NAME = "base-layer"
-    def setUp(self):
-        super(ProvisionedLayersProjectTestCase, self).setUp()
-        self.layersource, created = LayerSource.objects.get_or_create(sourcetype = LayerSource.TYPE_IMPORTED)
-        self.releaselayersourcepriority, created = ReleaseLayerSourcePriority.objects.get_or_create(release = self.release, layer_source = self.layersource)
-        self.layer, created = Layer.objects.get_or_create(name=XHRDataTypeAheadTestCase.LAYER_NAME, layer_source=self.layersource, vcs_url="/tmp/")
-        self.lv, created = Layer_Version.objects.get_or_create(layer = self.layer, project = self.project, layer_source=self.layersource, commit="master")
+        self.assertEqual(sorted(data["rows"][0]),
+                         ['bitbake_version_id', 'created', 'id',
+                          'layersTypeAheadUrl', 'name', 'projectBuildsUrl',
+                          'projectPageUrl', 'recipesTypeAheadUrl',
+                          'release_id', 'short_description', 'updated',
+                          'user_id'])
 
+    def test_typeaheads(self):
+        """Test typeahead ReST API"""
+        layers_url = reverse('xhr_layerstypeahead', args=(self.project.id,))
+        prj_url = reverse('xhr_projectstypeahead')
 
-class XHRDataTypeAheadTestCase(ProvisionedLayersProjectTestCase):
+        urls = [layers_url,
+                prj_url,
+                reverse('xhr_recipestypeahead', args=(self.project.id,)),
+                reverse('xhr_machinestypeahead', args=(self.project.id,)),
+               ]
 
-    def setUp(self):
-        super(XHRDataTypeAheadTestCase, self).setUp()
-        self.assertTrue(self.lv in self.project.compatible_layerversions())
+        def basic_reponse_check(response, url):
+            """Check data structure of http response."""
+            self.assertEqual(response.status_code, 200)
+            self.assertTrue(response['Content-Type'].startswith('application/json'))
 
-    def test_xhr_datatypeahead_layer(self):
-        response = self.client.get(reverse('xhr_datatypeahead', args=(self.project.id,)), {"type": "layerdeps"})
-        self.assertEqual(response.status_code, 200)
-        self.assertTrue(response['Content-Type'].startswith('application/json'))
-
-        try:
-            import json
             data = json.loads(response.content)
-        except:
-            self.fail("Response %s is not json-loadable" % response.content)
 
-        self.assertTrue("error" in data)
-        self.assertEqual(data["error"], "ok")
-        self.assertTrue("list" in data)
-        self.assertTrue(len(data["list"]) > 0)
+            self.assertTrue("error" in data)
+            self.assertEqual(data["error"], "ok")
+            self.assertTrue("results" in data)
 
-        self.assertTrue(XHRDataTypeAheadTestCase.LAYER_NAME in map(lambda x: x["name"], data["list"]))
+            # We got a result so now check the fields
+            if len(data['results']) > 0:
+                result = data['results'][0]
+
+                self.assertTrue(len(result['name']) > 0)
+                self.assertTrue("detail" in result)
+                self.assertTrue(result['id'] > 0)
+
+                # Special check for the layers typeahead's extra fields
+                if url == layers_url:
+                    self.assertTrue(len(result['layerdetailurl']) > 0)
+                    self.assertTrue(len(result['vcs_url']) > 0)
+                    self.assertTrue(len(result['vcs_reference']) > 0)
+                # Special check for project typeahead extra fields
+                elif url == prj_url:
+                    self.assertTrue(len(result['projectPageUrl']) > 0)
+
+                return True
+
+            return False
+
+        import string
+
+        for url in urls:
+            results = False
+
+            for typeing in list(string.ascii_letters):
+                response = self.client.get(url, {'search': typeing})
+                results = basic_reponse_check(response, url)
+                if results:
+                    break
+
+            # After "typeing" the alpabet we should have result true
+            # from each of the urls
+            self.assertTrue(results)

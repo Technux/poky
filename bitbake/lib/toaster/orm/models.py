@@ -20,9 +20,10 @@
 # 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 
 from django.db import models
-from django.db.models import F, Q, Avg
+from django.db.models import F, Q, Avg, Max
 from django.utils import timezone
 
+from django.core.urlresolvers import reverse
 
 from django.core import validators
 from django.conf import settings
@@ -193,6 +194,45 @@ class Project(models.Model):
 
     def projectlayer_equivalent_set(self):
         return self.compatible_layerversions().filter(layer__name__in = [x.layercommit.layer.name for x in self.projectlayer_set.all()]).select_related("up_branch")
+
+    def get_available_machines(self):
+        """ Returns QuerySet of all Machines which are provided by the
+        Layers currently added to the Project """
+        queryset = Machine.objects.filter(layer_version__in=self.projectlayer_equivalent_set)
+        return queryset
+
+    def get_all_compatible_machines(self):
+        """ Returns QuerySet of all the compatible machines available to the
+        project including ones from Layers not currently added """
+        compatible_layers = self.compatible_layerversions()
+
+        queryset = Machine.objects.filter(layer_version__in=compatible_layers)
+        return queryset
+
+    def get_available_recipes(self):
+        """ Returns QuerySet of all Recipes which are provided by the Layers
+        currently added to the Project """
+        project_layers = self.projectlayer_equivalent_set()
+        queryset = Recipe.objects.filter(layer_version__in = project_layers)
+
+        # Copied from get_all_compatible_recipes
+        search_maxids = map(lambda i: i[0], list(queryset.values('name').distinct().annotate(max_id=Max('id')).values_list('max_id')))
+        queryset = queryset.filter(id__in=search_maxids).select_related('layer_version', 'layer_version__layer', 'layer_version__up_branch', 'layer_source')
+        # End copy
+
+        return queryset
+
+    def get_all_compatible_recipes(self):
+        """ Returns QuerySet of all the compatible Recipes available to the
+        project including ones from Layers not currently added """
+        compatible_layerversions = self.compatible_layerversions()
+        queryset = Recipe.objects.filter(layer_version__in = compatible_layerversions)
+
+        search_maxids = map(lambda i: i[0], list(queryset.values('name').distinct().annotate(max_id=Max('id')).values_list('max_id')))
+
+        queryset = queryset.filter(id__in=search_maxids).select_related('layer_version', 'layer_version__layer', 'layer_version__up_branch', 'layer_source')
+        return queryset
+
 
     def schedule_build(self):
         from bldcontrol.models import BuildRequest, BRTarget, BRLayer, BRVariable, BRBitbake
@@ -586,6 +626,7 @@ class Recipe(models.Model):
     bugtracker = models.URLField(blank=True)
     file_path = models.FilePathField(max_length=255)
     pathflags = models.CharField(max_length=200, blank=True)
+    is_image = models.BooleanField(default=False)
 
     def get_layersource_view_url(self):
         if self.layer_source is None:
@@ -889,9 +930,8 @@ class LayerIndexLayerSource(LayerSource):
                 dependlist[lv] = []
             try:
                 dependlist[lv].append(Layer_Version.objects.get(layer_source = self, layer__up_id = ldi['dependency'], up_branch = lv.up_branch))
-            except Layer_Version.DoesNotExist as e:
+            except Layer_Version.DoesNotExist:
                 print "Cannot find layer version ", self, ldi['dependency'], lv.up_branch
-                raise e
 
         for lv in dependlist:
             LayerVersionDependency.objects.filter(layer_version = lv).delete()
@@ -939,6 +979,8 @@ class LayerIndexLayerSource(LayerSource):
                 ro.homepage = ri['homepage']
                 ro.bugtracker = ri['bugtracker']
                 ro.file_path = ri['filepath'] + "/" + ri['filename']
+                if 'inherits' in ri:
+                    ro.is_image = 'image' in ri['inherits'].split()
                 ro.save()
             except:
                 #print "Duplicate Recipe, ignoring: ", vars(ro)
@@ -1106,6 +1148,9 @@ class Layer_Version(models.Model):
         if self.up_branch is not None:
             return self.up_branch.name
         return ("Cannot determine the vcs_reference for layer version %s" % vars(self))
+
+    def get_detailspage_url(self, project_id):
+        return reverse('layerdetails', args=(project_id, self.pk))
 
     def __unicode__(self):
         return "%d %s (VCS %s, Project %s)" % (self.pk, str(self.layer), self.get_vcs_reference(), self.build.project if self.build is not None else "No project")

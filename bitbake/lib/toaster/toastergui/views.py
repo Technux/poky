@@ -2132,7 +2132,7 @@ if True:
                 prj = Project.objects.create_project(name = request.POST['projectname'], release = release)
                 prj.user_id = request.user.pk
                 prj.save()
-                return redirect(reverse(project, args=(prj.pk,)) + "#/newproject")
+                return redirect(reverse(project, args=(prj.pk,)) + "?notify=new-project")
 
             except (IntegrityError, BadParameterException) as e:
                 # fill in page with previously submitted values
@@ -2160,12 +2160,12 @@ if True:
         # execute POST requests
         if request.method == "POST":
             # add layers
-            if 'layerAdd' in request.POST:
+            if 'layerAdd' in request.POST and len(request.POST['layerAdd']) > 0:
                 for lc in Layer_Version.objects.filter(pk__in=[i for i in request.POST['layerAdd'].split(",") if len(i) > 0]):
                     ProjectLayer.objects.get_or_create(project = prj, layercommit = lc)
 
             # remove layers
-            if 'layerDel' in request.POST:
+            if 'layerDel' in request.POST and len(request.POST['layerDel']) > 0:
                 for t in request.POST['layerDel'].strip().split(" "):
                     pt = ProjectLayer.objects.filter(project = prj, layercommit_id = int(t)).delete()
 
@@ -2174,6 +2174,10 @@ if True:
                 prj.save();
 
             if 'projectVersion' in request.POST:
+                # If the release is the current project then return now
+                if prj.release.pk == int(request.POST.get('projectVersion',-1)):
+                    return {}
+
                 prj.release = Release.objects.get(pk = request.POST['projectVersion'])
                 # we need to change the bitbake version
                 prj.bitbake_version = prj.release.bitbake_version
@@ -2220,9 +2224,10 @@ if True:
                         "id": x.layercommit.pk,
                         "orderid": x.pk,
                         "name" : x.layercommit.layer.name,
-                        "giturl": x.layercommit.layer.vcs_url,
+                        "vcs_url": x.layercommit.layer.vcs_url,
+                        "vcs_reference" : x.layercommit.get_vcs_reference(),
                         "url": x.layercommit.layer.layer_index_url,
-                        "layerdetailurl": reverse("layerdetails", args=(prj.id, x.layercommit.pk,)),
+                        "layerdetailurl": x.layercommit.get_detailspage_url(prj.pk),
                 # This branch name is actually the release
                         "branch" : { "name" : x.layercommit.get_vcs_reference(), "layersource" : x.layercommit.up_branch.layer_source.name if x.layercommit.up_branch != None else None}},
                     prj.projectlayer_set.all().order_by("id")),
@@ -2231,10 +2236,13 @@ if True:
             "freqtargets": freqtargets[:5],
             "releases": map(lambda x: {"id": x.pk, "name": x.name, "description":x.description}, Release.objects.all()),
             "project_html": 1,
+            "recipesTypeAheadUrl": reverse('xhr_recipestypeahead', args=(prj.pk,)),
+            "projectBuildsUrl": reverse('projectbuilds', args=(prj.pk,)),
         }
 
         if prj.release is not None:
-            context["prj"]["release"] = { "id": prj.release.pk, "name": prj.release.name, "desc": prj.release.description}
+            context['release'] = { "id": prj.release.pk, "name": prj.release.name, "description": prj.release.description}
+
 
         try:
             context["machine"] = {"name": prj.projectvariable_set.get(name="MACHINE").value}
@@ -2250,47 +2258,37 @@ if True:
 
     from django.views.decorators.csrf import csrf_exempt
     @csrf_exempt
-    def xhr_datatypeahead(request, pid):
+    def xhr_testreleasechange(request, pid):
+        def response(data):
+            return HttpResponse(jsonfilter(data),
+                                content_type="application/json")
+
+        """ returns layer versions that would be deleted on the new
+        release__pk """
         try:
             prj = Project.objects.get(pk = pid)
+            new_release_id = request.GET['new_release_id']
 
+            # If we're already on this project do nothing
+            if prj.release.pk == int(new_release_id):
+                return reponse({"error": "ok", "rows": []})
 
-            # returns layer versions that would be deleted on the new release__pk
-            if request.GET.get('type', None) == "versionlayers":
+            retval = []
 
-                retval = []
-                for i in prj.projectlayer_set.all():
-                    lv = prj.compatible_layerversions(release = Release.objects.get(pk=request.GET.get('search', None))).filter(layer__name = i.layercommit.layer.name)
-                    # there is no layer_version with the new release id, and the same name
-                    if lv.count() < 1:
-                        retval.append(i)
+            for i in prj.projectlayer_set.all():
+                lv = prj.compatible_layerversions(release = Release.objects.get(pk=new_release_id)).filter(layer__name = i.layercommit.layer.name)
+                # there is no layer_version with the new release id,
+                # and the same name
+                if lv.count() < 1:
+                    retval.append(i)
 
-                return HttpResponse(jsonfilter( {"error":"ok",
-                    "rows" : map( _lv_to_dict(prj),  map(lambda x: x.layercommit, retval ))
-                    }), content_type = "application/json")
+            return response({"error":"ok",
+                             "rows" : map( _lv_to_dict(prj),
+                                          map(lambda x: x.layercommit, retval ))
+                            })
 
-
-            # returns layer versions that provide the named targets
-            if request.GET.get('type', None) == "layers4target":
-                # we return data only if the recipe can't be provided by the current project layer set
-                if reduce(lambda x, y: x + y, [x.recipe_layer_version.filter(name=request.GET.get('search', None)).count() for x in prj.projectlayer_equivalent_set()], 0):
-                    final_list = []
-                else:
-                    queryset_all = prj.compatible_layerversions().filter(recipe_layer_version__name = request.GET.get('search', None))
-
-                    # exclude layers in the project
-                    queryset_all = queryset_all.exclude(pk__in = [x.id for x in prj.projectlayer_equivalent_set()])
-
-                    # and show only the selected layers for this project
-                    final_list = set([x.get_equivalents_wpriority(prj)[0] for x in queryset_all])
-
-                return HttpResponse(jsonfilter( { "error":"ok",  "rows" : map( _lv_to_dict(prj), final_list) }), content_type = "application/json")
-
-
-            raise Exception("Unknown request! " + request.GET.get('type', "No parameter supplied"))
         except Exception as e:
-            return HttpResponse(jsonfilter({"error":str(e) + "\n" + traceback.format_exc()}), content_type = "application/json")
-
+            return response({"error": str(e) })
 
     def xhr_configvaredit(request, pid):
         try:
@@ -2434,7 +2432,8 @@ if True:
                             continue
 
                         if prj_layer_created:
-                            layers_added.append({'id': layer_dep_obj.id, 'name': Layer.objects.get(id=layer_dep_obj.layer_id).name})
+                            layerdepdetailurl = reverse('layerdetails', args=(prj.id, layer_dep_obj.pk))
+                            layers_added.append({'id': layer_dep_obj.id, 'name': Layer.objects.get(id=layer_dep_obj.layer_id).name, 'layerdetailurl': layerdepdetailurl })
 
 
                 # If an old layer version exists in our project then remove it
@@ -2453,8 +2452,17 @@ if True:
 
                 return HttpResponse(jsonfilter({"error": "Uncaught error: Could not create layer version"}), content_type = "application/json")
 
+        layerdetailurl = reverse('layerdetails', args=(prj.id, layer_version.pk))
 
-        return HttpResponse(jsonfilter({"error": "ok", "imported_layer" : { "name" : layer.name, "id": layer_version.id },  "deps_added": layers_added }), content_type = "application/json")
+        json_response = {"error": "ok",
+                         "imported_layer" : {
+                           "name" : layer.name,
+                           "id": layer_version.id,
+                           "layerdetailurl": layerdetailurl,
+                         },
+                         "deps_added": layers_added }
+
+        return HttpResponse(jsonfilter(json_response), content_type = "application/json")
 
     def xhr_updatelayer(request):
 
@@ -2508,6 +2516,21 @@ if True:
             'project': Project.objects.get(id=pid),
         }
         return render(request, template, context)
+
+    @_template_renderer('layerdetails.html')
+    def layerdetails(request, pid, layerid):
+        project = Project.objects.get(pk=pid)
+        layer_version = Layer_Version.objects.get(pk=layerid)
+
+        context = { 'project' : project,
+                   'layerversion' : layer_version,
+                   'layerdeps' : { "list": [
+                     [{"id": y.id, "name": y.layer.name} for y in x.depends_on.get_equivalents_wpriority(project)][0] for x in layer_version.dependencies.all()]},
+                   'projectlayers': map(lambda prjlayer: prjlayer.layercommit.id, ProjectLayer.objects.filter(project=project))
+                  }
+
+        return context
+
 
     def get_project_configvars_context():
         # Vars managed outside of this view
@@ -2627,6 +2650,7 @@ if True:
         except InvalidRequestException as e:
             raise RedirectException('projectbuilds', request.GET, e.response, pid = pid)
 
+        context['project'] = prj
         _set_parameters_values(pagesize, orderby, request)
 
         return context
@@ -2764,9 +2788,9 @@ if True:
         for p in project_info.object_list:
             p.id = p.pk
             p.projectPageUrl = reverse('project', args=(p.id,))
-            p.projectLayersUrl = reverse('projectlayers', args=(p.id,))
+            p.layersTypeAheadUrl = reverse('xhr_layerstypeahead', args=(p.id,))
+            p.recipesTypeAheadUrl = reverse('xhr_recipestypeahead', args=(p.id,))
             p.projectBuildsUrl = reverse('projectbuilds', args=(p.id,))
-            p.projectTargetsUrl = reverse('projectavailabletargets', args=(p.id,))
 
         # build view-specific information; this is rendered specifically in the builds page, at the top of the page (i.e. Recent builds)
         build_mru = _get_latest_builds()
